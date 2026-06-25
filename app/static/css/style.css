@@ -309,7 +309,6 @@ html { scroll-behavior: smooth; }
     margin-bottom: 36px;
     max-width: 600px;
     margin-left: auto;
-    margin-right: 60px;
     margin-right: auto;
 }
 .lp-hero-cta {
@@ -1512,8 +1511,7 @@ html { scroll-behavior: smooth; }
 }
 
 .chat-header h1 { font-size: 16px; color: var(--text-primary); font-weight: 600; }
-.chat-header .header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto;
-    margin-right: 60px; }
+.chat-header .header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
 .header-user-info {
     display: flex;
     align-items: center;
@@ -1628,14 +1626,11 @@ html { scroll-behavior: smooth; }
 }
 .welcome-center h2 { font-size: 28px; margin-bottom: 8px; color: var(--text-primary); font-weight: 700; }
 .welcome-center .welcome-agent-name { font-size: 26px; margin-bottom: 6px; color: var(--accent, #D4A843); font-weight: 700; }
-.welcome-center .welcome-agent-desc { color: var(--text-secondary); font-size: 14px; line-height: 1.8; margin-bottom: 6px; max-width: 480px; margin-left: auto;
-    margin-right: 60px; margin-right: auto; }
-.welcome-center .welcome-agent-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.6; margin-bottom: 16px; max-width: 480px; margin-left: auto;
-    margin-right: 60px; margin-right: auto; opacity: 0.7; }
+.welcome-center .welcome-agent-desc { color: var(--text-secondary); font-size: 14px; line-height: 1.8; margin-bottom: 6px; max-width: 480px; margin-left: auto; margin-right: auto; }
+.welcome-center .welcome-agent-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.6; margin-bottom: 16px; max-width: 480px; margin-left: auto; margin-right: auto; opacity: 0.7; }
 .welcome-center .welcome-keyword-hint { color: var(--text-secondary); font-size: 12px; line-height: 1.6; margin-top: 10px; text-align: center; opacity: 0.7; }
 .welcome-center p { color: var(--text-secondary); font-size: 15px; line-height: 1.7; margin-bottom: 24px; }
-.welcome-center .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; max-width: 660px; margin-left: auto;
-    margin-right: 60px; margin-right: auto; justify-content: center; }
+.welcome-center .quick-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; max-width: 660px; margin-left: auto; margin-right: auto; justify-content: center; }
 .welcome-center .quick-actions.many-questions { max-width: 660px; gap: 8px; }
 .welcome-center .quick-actions.kw-five-rows { display: flex; flex-direction: column; gap: 8px; max-width: 660px; }
 .welcome-center .quick-actions.kw-five-rows .kw-row { display: flex; flex-wrap: nowrap; gap: 8px; justify-content: center; }
@@ -1675,7 +1670,6 @@ html { scroll-behavior: smooth; }
     padding-top: 8px;
     max-width: 800px;
     margin-left: auto;
-    margin-right: 60px;
     margin-right: auto;
     position: relative;
     animation: msgFadeIn 0.35s ease-out;
@@ -2088,7 +2082,6 @@ html { scroll-behavior: smooth; }
     align-items: center;
     justify-content: center;
     margin-left: auto;
-    margin-right: 60px;
 }
 .login-form-card {
     width: 400px;
