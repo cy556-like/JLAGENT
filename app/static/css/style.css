@@ -2072,6 +2072,7 @@ html { scroll-behavior: smooth; }
     height: auto;
     filter: drop-shadow(0 2px 8px rgba(0,0,0,0.3));
     user-select: none;
+    transform: translateY(-80px);
 }
 
 /* Right: Login Form Panel */
@@ -2080,6 +2081,7 @@ html { scroll-behavior: smooth; }
     display: flex;
     align-items: center;
     justify-content: center;
+    margin-right: 80px;
 }
 .login-form-card {
     width: 400px;
