@@ -693,7 +693,7 @@ function renderMyAgents() {
             <div class="agent-item-info">
                 <div class="agent-item-name">${escapeHtml(agent.name)}</div>
             </div>
-            <button class="agent-action-btn new-chat" data-action="new-chat" data-agent-id="${agent.id}" title="新建对话" aria-label="新建对话"><svg width="22" height="22" viewBox="0 0 24 24" class="agent-new-chat-icon"><rect x="1" y="1" width="22" height="22" rx="6" ry="6" fill="#C62828"/><path d="M9.5 6.5L18.5 12L9.5 17.5Z" fill="white"/></svg></button>
+            <button class="agent-action-btn new-chat" data-action="new-chat" data-agent-id="${agent.id}" title="新建对话" aria-label="新建对话"><svg width="22" height="22" viewBox="0 0 24 24" class="agent-new-chat-icon"><rect x="1" y="1" width="22" height="22" rx="6" ry="6" fill="#1051BF"/><path d="M9.5 6.5L18.5 12L9.5 17.5Z" fill="white"/></svg></button>
         `;
         list.appendChild(item);
     });
@@ -3174,7 +3174,7 @@ async function loadKbPageDocs() {
             const ext = docName.split('.').pop().toLowerCase();
             let iconHtml = '';
             if (ext === 'pdf') {
-                iconHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+                iconHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#1051BF" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
             } else if (ext === 'docx' || ext === 'doc') {
                 iconHtml = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
             } else if (ext === 'xlsx' || ext === 'xls') {
@@ -3240,13 +3240,13 @@ async function uploadToKbPage(file) {
             statusEl.className = 'kb-progress-status success';
         } else {
             barFill.style.width = '100%';
-            barFill.style.background = '#ef4444';
+            barFill.style.background = '#1051BF';
             statusEl.textContent = '上传失败：' + (data.detail || '未知错误');
             statusEl.className = 'kb-progress-status error';
         }
     } catch (e) {
         barFill.style.width = '100%';
-        barFill.style.background = '#ef4444';
+        barFill.style.background = '#1051BF';
         statusEl.textContent = '网络错误，请重试';
         statusEl.className = 'kb-progress-status error';
     }
