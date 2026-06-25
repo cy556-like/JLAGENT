@@ -1993,11 +1993,7 @@ html { scroll-behavior: smooth; }
     position: relative;
 }
 .login-fullscreen::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(255, 255, 255, 0.15);
-    z-index: 0;
+    content: none;
 }
 
 /* Top Brand Bar */
