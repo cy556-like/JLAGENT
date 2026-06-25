@@ -2082,6 +2082,7 @@ html { scroll-behavior: smooth; }
     align-items: center;
     justify-content: center;
     margin-left: auto;
+    margin-right: 60px;
 }
 .login-form-card {
     width: 400px;
