@@ -65,7 +65,7 @@ function sortAgentsByFixedOrder(agents) {
 const AGENT_WELCOME_CONFIG = {
     'dfmea-risk-agent': {
         name: '整车制造过程改进智能体',
-        desc: '聚焦冲压、焊装、涂装、总装四大工艺的过程能力提升与缺陷归因，结合Audit评审与8D方法系统定位偏差源',
+        desc: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。',
         questions: [
             { label: '冲压件超差排查', question: '冲压单件超出公差的常见原因有哪些，按人机料法环如何系统排查？' },
             { label: '夹具趋势预警', question: '如何根据CII指数变化趋势，提前识别焊装夹具的磨损或松动问题？' },
@@ -91,7 +91,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'part-design-agent': {
         name: '三电系统质量改进智能体',
-        desc: '聚焦电池、电机、电控的进货检验、EOL测试与失效归因，结合三电产线数据快速定位真因',
+        desc: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。',
         questions: [
             { label: '模组来料标准', question: '三电系统进货检验中，电池模组的开路电压和内阻需要满足什么标准才算合格？' },
             { label: '气密泄漏定位', question: '电池包气密性测试泄漏率超标，常见的泄漏点有哪些，如何通过分段打压快速定位？' },
@@ -117,7 +117,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'simulation-optimization-agent': {
         name: '整车评审与AUDIT智能体',
-        desc: '聚焦整车静态、动态评审及AUDIT扣分的分级、追溯与改进闭环，将评审问题反向追溯至责任工序',
+        desc: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。',
         questions: [
             { label: 'AUDIT缺陷等级标准', question: '整车AUDIT评审中，缺陷等级如何划分，A类、B类、C类缺陷的定义和扣分标准是什么？' },
             { label: '间隙段差评审标准', question: '静态评审时，车身外观间隙段差的测量方法和合格范围如何确定，不同车型是否有差异？' },
@@ -143,7 +143,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'material-selection-agent': {
         name: '新车型质量改进智能体',
-        desc: '聚焦ET/PT/SOP各阶段质量阀评审、过程能力爬坡与历史经验复用，推动新车型质量成熟度提升',
+        desc: '针对新车型，从试制到爬产构建全生命周期质量门，快速暴露弱点，确保SOP质量即成熟。',
         questions: [
             { label: 'ET问题优先级管理', question: '新车型ET试制阶段发现的问题，如何按严重度和频次建立优先级排序并分配整改责任人？' },
             { label: 'PT过程能力评价节点', question: '如何在PT阶段设置过程能力评价节点，判断各工序是否具备进入SOP的量产成熟度？' },
@@ -169,7 +169,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'manufacturing-process-agent': {
         name: '全球车出口保障智能体',
-        desc: '聚焦出口车型的强制认证、右舵差异、防腐分级与海外售后快速响应，保障出口车全生命周期质量合规',
+        desc: '专为全球车护航，整合目标市场法规、环境适应性及左/右舵特殊要求，前置规避出口质量风险，确保顺利通关与海外口碑。',
         questions: [
             { label: '出口认证差异对比', question: '银河E5出口欧洲与东南亚市场，需要分别通过哪些强制认证，认证项目的主要差异是什么？' },
             { label: '欧盟EMC差异分析', question: '欧盟WVTA认证对整车电磁兼容EMC的要求与中国标准有何不同，需要额外增加哪些测试项？' },
@@ -195,7 +195,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'ee-design-agent': {
         name: '供应商来料协同智能体',
-        desc: '聚焦进货检验标准、SCAR/8D协同、PPAP调阅与来料质量趋势分析，支撑质量改进科与SQE的高效协同',
+        desc: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。',
         questions: [
             { label: '来料检验标准查询', question: '如何快速查询特定零部件的进货检验标准和最新版规格书？' },
             { label: '来料异常传递流程', question: '当产线发生疑似来料异常时，标准的信息传递和升级流程是什么？' },
@@ -221,7 +221,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'embedded-software-agent': {
         name: '售后市场质量改进智能体',
-        desc: '聚焦售后故障聚类、VIN批次锁定、索赔数据分析与改进效果追踪，将售后问题反向追溯至制造端',
+        desc: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。',
         questions: [
             { label: '高频故障聚类排名', question: '售后维修数据中，如何按故障现象聚类，找出TOP10高频问题的排名及占比？' },
             { label: 'VIN码批次范围锁定', question: '某类售后故障集中爆发时，如何通过生产日期和VIN码锁定问题批次的范围？' },
@@ -247,7 +247,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'test-verification-agent': {
         name: '数据统计分析预警智能体',
-        desc: '聚焦FTT、CII、Audit、CPK等质量指标的统计分析与分层预警，基于海量过程数据自动识别异常',
+        desc: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。',
         questions: [
             { label: 'FTT日周对比查询', question: '如何快速查询昨日整车下线一次合格率（FTT）及各车间直通率，并与周均值做对比？' },
             { label: 'CII异常自动预警规则', question: '白车身关键测点CII指数连续3点下降，系统如何自动判定异常并推送预警通知？' },
@@ -273,7 +273,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'equipment-production-agent': {
         name: '防再发与经验库智能体',
-        desc: '聚焦已关闭质量问题的结构化入库、相似案例匹配与防再发措施闭环验证，将历史经验转化为新车型输入',
+        desc: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。',
         questions: [
             { label: '8D报告结构化入库', question: '如何将已关闭的质量问题8D报告，结构化录入经验库并关联到对应工序、缺陷类型和根本原因？' },
             { label: '历史尺寸链经验检索', question: '新车型导入时，如何一键检索同平台历史车型在焊装尺寸链上的所有经验教训？' },
@@ -299,7 +299,7 @@ const AGENT_WELCOME_CONFIG = {
     },
     'standards-innovation-agent': {
         name: '新工程师质量教练智能体',
-        desc: '聚焦质量改进科新人的岗位职责、8D/鱼骨图/QC七大手法等质量工具教学，提供循序渐进的培训路径',
+        desc: '部门新人占比超90%，提供手把手流程指引、典型缺陷判别训练与即时答疑，如同随身导师，加速新工程师能力提升。',
         questions: [
             { label: '新人岗位职责认知', question: '我是质量改进科的新人，科室的核心职责和与其他科室的协同边界是什么？' },
             { label: '异常处置首步流程', question: '当产线发生质量异常时，我作为质量改进工程师的第一步应该做什么，标准处置流程是怎样的？' },
@@ -348,16 +348,16 @@ function forceCorrectAgents() {
     existing.forEach(a => { existingMap[a.id] = a; });
 
     const defaults = {
-        'dfmea-risk-agent': { name: '整车制造过程改进智能体', task: '聚焦冲压、焊装、涂装、总装四大工艺的过程能力提升与缺陷归因，结合Audit评审与8D方法系统定位偏差源', summary: '整车制造过程改进' },
-        'part-design-agent': { name: '三电系统质量改进智能体', task: '聚焦电池、电机、电控的进货检验、EOL测试与失效归因，结合三电产线数据快速定位真因', summary: '三电系统质量改进' },
-        'simulation-optimization-agent': { name: '整车评审与AUDIT智能体', task: '聚焦整车静态、动态评审及AUDIT扣分的分级、追溯与改进闭环，将评审问题反向追溯至责任工序', summary: '整车评审与AUDIT' },
-        'material-selection-agent': { name: '新车型质量改进智能体', task: '聚焦ET/PT/SOP各阶段质量阀评审、过程能力爬坡与历史经验复用，推动新车型质量成熟度提升', summary: '新车型质量改进' },
-        'manufacturing-process-agent': { name: '全球车出口保障智能体', task: '聚焦出口车型的强制认证、右舵差异、防腐分级与海外售后快速响应，保障出口车全生命周期质量合规', summary: '全球车出口保障' },
-        'ee-design-agent': { name: '供应商来料协同智能体', task: '聚焦进货检验标准、SCAR/8D协同、PPAP调阅与来料质量趋势分析，支撑质量改进科与SQE的高效协同', summary: '供应商来料协同' },
-        'embedded-software-agent': { name: '售后市场质量改进智能体', task: '聚焦售后故障聚类、VIN批次锁定、索赔数据分析与改进效果追踪，将售后问题反向追溯至制造端', summary: '售后市场质量改进' },
-        'test-verification-agent': { name: '数据统计分析预警智能体', task: '聚焦FTT、CII、Audit、CPK等质量指标的统计分析与分层预警，基于海量过程数据自动识别异常', summary: '数据统计分析预警' },
-        'equipment-production-agent': { name: '防再发与经验库智能体', task: '聚焦已关闭质量问题的结构化入库、相似案例匹配与防再发措施闭环验证，将历史经验转化为新车型输入', summary: '防再发与经验库' },
-        'standards-innovation-agent': { name: '新工程师质量教练智能体', task: '聚焦质量改进科新人的岗位职责、8D/鱼骨图/QC七大手法等质量工具教学，提供循序渐进的培训路径', summary: '新工程师质量教练' }
+        'dfmea-risk-agent': { name: '整车制造过程改进智能体', task: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。', summary: '整车制造过程改进' },
+        'part-design-agent': { name: '三电系统质量改进智能体', task: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。', summary: '三电系统质量改进' },
+        'simulation-optimization-agent': { name: '整车评审与AUDIT智能体', task: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。', summary: '整车评审与AUDIT' },
+        'material-selection-agent': { name: '新车型质量改进智能体', task: '针对新车型，从试制到爬产构建全生命周期质量门，快速暴露弱点，确保SOP质量即成熟。', summary: '新车型质量改进' },
+        'manufacturing-process-agent': { name: '全球车出口保障智能体', task: '专为全球车护航，整合目标市场法规、环境适应性及左/右舵特殊要求，前置规避出口质量风险，确保顺利通关与海外口碑。', summary: '全球车出口保障' },
+        'ee-design-agent': { name: '供应商来料协同智能体', task: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。', summary: '供应商来料协同' },
+        'embedded-software-agent': { name: '售后市场质量改进智能体', task: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。', summary: '售后市场质量改进' },
+        'test-verification-agent': { name: '数据统计分析预警智能体', task: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。', summary: '数据统计分析预警' },
+        'equipment-production-agent': { name: '防再发与经验库智能体', task: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。', summary: '防再发与经验库' },
+        'standards-innovation-agent': { name: '新工程师质量教练智能体', task: '部门新人占比超90%，提供手把手流程指引、典型缺陷判别训练与即时答疑，如同随身导师，加速新工程师能力提升。', summary: '新工程师质量教练' }
     };
 
     const correctAgents = Object.keys(defaults).map(id => {
