@@ -626,7 +626,7 @@ function deleteAgent(agentId) {
         document.getElementById('kbUploadToggle').classList.remove('active');
         document.getElementById('agentKbBar').style.display = 'none';
         modeChatId['agent'] = null;
-        document.getElementById('chatTitle').textContent = '东风科技研发智能体平台';
+        document.getElementById('chatTitle').textContent = 'GY  质量改进工程师助手';
         updateKbUploadVisibility();
         updateHeaderKbVisibility();
     }
@@ -965,9 +965,9 @@ function switchMode(mode) {
     if (titleEl) {
         if (mode === 'agent' && currentAgentId) {
             const agent = myAgents.find(a => a.id === currentAgentId);
-            titleEl.textContent = agent ? agent.name : '东风科技研发智能体平台';
+            titleEl.textContent = agent ? agent.name : 'GY  质量改进工程师助手';
         } else {
-            titleEl.textContent = mode === 'agent' ? '东风科技研发智能体平台' : 'Chat';
+            titleEl.textContent = mode === 'agent' ? 'GY  质量改进工程师助手' : 'Chat';
         }
     }
     // Reset agent when switching to chat mode
@@ -1576,7 +1576,7 @@ function updateWelcomeContent() {
     } else {
         // 默认欢迎页
         welcomeEl.innerHTML = `
-            <h2>东风科技研发智能体平台</h2>
+            <h2>GY  质量改进工程师助手</h2>
             <p>专业模具AI智能体，独立赋能研发与质量管理</p>
             <div class="quick-actions">
                 <span class="quick-action" onclick="fillQuick(this)" data-question="模具设计评审有哪些关键节点？" role="button" tabindex="0">设计评审</span>
