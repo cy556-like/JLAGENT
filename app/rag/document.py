@@ -517,13 +517,20 @@ def get_vector_store(agent_id: str = None):
                 _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DIR)
                 _chroma_client._created_at = time.time()  # [v8] 记录创建时间
                 logger.info(f"[优化3] ChromaDB PersistentClient 已创建全局单例: {settings.CHROMA_DIR}")
+
+            # [P0-1 修复] 显式指定 cosine 距离度量。
+            # 默认 L2 距离与下游 `1 - score` 形式的 relevance_score 不兼容，
+            # 且对文本 embedding 来说 cosine 是更合适的度量。
+            # collection_metadata 在 collection 首次创建时生效；已存在的 collection
+            # 会沿用其原始 distance，需通过 rebuild_index 重建才能切换。
             vs = Chroma(
                 collection_name=collection_name,
                 client=_chroma_client,
                 embedding_function=embeddings,
+                collection_metadata={"hnsw:space": "cosine"},
             )
             _vector_store_cache[cache_key] = vs
-            logger.info(f"ChromaDB 已连接: collection={collection_name}, agent_id={agent_id}")
+            logger.info(f"ChromaDB 已连接: collection={collection_name}, agent_id={agent_id}, space=cosine")
             # [性能修复] LRU淘汰：超过上限时移除最早的缓存
             while len(_vector_store_cache) > _VECTOR_STORE_CACHE_MAX_SIZE:
                 oldest_key = next(iter(_vector_store_cache))
@@ -535,13 +542,15 @@ def get_vector_store(agent_id: str = None):
             try:
                 import chromadb
                 _chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DIR)
+                # [P0-1 修复] retry 路径同样指定 cosine
                 vs = Chroma(
                     collection_name=collection_name,
                     client=_chroma_client,
                     embedding_function=embeddings,
+                    collection_metadata={"hnsw:space": "cosine"},
                 )
                 _vector_store_cache[cache_key] = vs
-                logger.info(f"ChromaDB 已连接(retry): collection={collection_name}")
+                logger.info(f"ChromaDB 已连接(retry): collection={collection_name}, space=cosine")
                 # [性能修复] LRU淘汰
                 while len(_vector_store_cache) > _VECTOR_STORE_CACHE_MAX_SIZE:
                     oldest_key = next(iter(_vector_store_cache))
@@ -1584,6 +1593,20 @@ def index_document(file_path: str, filename: str = None, agent_id: str = None) -
         if cache_key in _bm25_doc_cache:
             del _bm25_doc_cache[cache_key]
 
+        # [P1-4 修复] 镜像写入 keyword_index.json，保证降级路径随时可用。
+        # 旧逻辑：仅在 embedding 不可用时才写 keyword_index.json。结果一旦
+        # embedding 跑通过一次，JSON 索引就一直是空的；后续若 embedding 临时
+        # 挂掉 5 分钟触发自动降级，会拿到空索引导致检索全部返回空。
+        # 修复：向量索引成功后，把同一批 chunks 也镜像写入 keyword_index.json。
+        # _add_chunks_to_keyword_index 内部已做去重（按 filename 删旧条目），
+        # 不会产生重复。
+        try:
+            _add_chunks_to_keyword_index(chunks, filename, agent_id)
+            logger.debug(f"[P1-4] 镜像写入关键词索引成功: {filename}")
+        except Exception as mirror_err:
+            # 镜像写入失败不影响主流程，仅记日志
+            logger.warning(f"[P1-4] 镜像写入关键词索引失败（不影响向量检索）: {mirror_err}")
+
         return {
             "filename": filename,
             "chunks": total_chunks,
@@ -2052,11 +2075,16 @@ def search_documents(query: str, top_k: int = 3, agent_id: str = None) -> list[d
         vector_results_raw = vector_results_raw[:top_k * 3]
         
         for doc, score in vector_results_raw:
+            # [P0-1 修复] cosine 距离范围 [0, 2]，0 表示完全相同，2 表示完全相反。
+            # 转换为相关度: relevance = 1 - distance/2，取值范围 [0, 1]。
+            # 旧实现 `1 - score` 是按 cosine ∈ [0,1] 算的，配合默认 L2 距离会得到
+            # 大量负数，导致下游 rerank 完全失效。
+            relevance = max(0.0, 1.0 - float(score) / 2.0)
             vector_results.append({
                 "content": doc.page_content,
                 "source": doc.metadata.get("source_file", "未知来源"),
                 "chunk_index": doc.metadata.get("chunk_index", -1),
-                "relevance_score": round(1 - score, 4),
+                "relevance_score": round(relevance, 4),
             })
     else:
         # vector_store 为 None，降级为关键词模式
@@ -2224,11 +2252,13 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
     vector_results_raw = vector_results_raw[:top_k * 3]
 
     for doc, score in vector_results_raw:
+        # [P0-1 修复] 同步版 search_documents：cosine 距离转相关度
+        relevance = max(0.0, 1.0 - float(score) / 2.0)
         vector_results.append({
             "content": doc.page_content,
             "source": doc.metadata.get("source_file", "未知来源"),
             "chunk_index": doc.metadata.get("chunk_index", -1),
-            "relevance_score": round(1 - score, 4),
+            "relevance_score": round(relevance, 4),
         })
 
     keyword_results = keyword_results[:top_k * 3]

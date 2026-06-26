@@ -376,12 +376,21 @@ async def search_documents_tool(query: str) -> str:
     if not results:
         return f"【检索结果】未找到与查询相关的文档内容（当前搜索的知识库: agent_id={current_aid}）。建议：1）尝试换用不同关键词搜索；2）确认相关文档是否已上传至对应智能体的知识库。"
 
-    # [#9] 简单重排序：关键词匹配度 + 向量相似度加权
-    query_keywords = set(query.replace("？", "").replace("？", "").replace("的", "").replace("了", "").replace("是", "").replace("什么", ""))
+    # [P0-2 修复] 直接使用 RRF 分数排序，不再做二次"简易 rerank"。
+    # 旧实现用 `0.4 * 字面字符重合度 + 0.6 * vector_score` 重排，会抹掉
+    # search_documents_async 里 RRF 融合的成果（rrf_score），且字符级
+    # 重合度对中文 query 几乎没有语义价值（每个汉字被当成独立 keyword）。
+    # 现在改为：优先用 rrf_score；若结果未经过 RRF（纯关键词降级场景），
+    # 则回退到 relevance_score 或 bm25_score。
     for r in results:
-        keyword_score = sum(1 for kw in query_keywords if kw in r.get("content", "")) / max(len(query_keywords), 1)
-        vector_score = r.get("relevance_score", 0.5)
-        r["final_score"] = 0.4 * keyword_score + 0.6 * vector_score
+        if "rrf_score" in r:
+            r["final_score"] = r["rrf_score"]
+        elif "relevance_score" in r:
+            r["final_score"] = r["relevance_score"]
+        elif "bm25_score" in r:
+            r["final_score"] = r["bm25_score"]
+        else:
+            r["final_score"] = r.get("relevance_score", 0.0)
 
     # 按综合分数排序
     results.sort(key=lambda x: x.get("final_score", 0), reverse=True)
