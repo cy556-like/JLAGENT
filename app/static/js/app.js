@@ -1353,18 +1353,19 @@ window.addEventListener('popstate', function(e) {
     if (e.state && e.state.page === 'chat') {
         // 回到聊天页 - 从知识库页返回 或 从登录页前进
         if (currentUser && authToken) {
-            // [BUG FIX] 检测当前是否已经在 chat 页面（避免 chat→chat 后退时无意义的 UI 重绘）
-            // 如果 kbPage 已隐藏 且 chatPage 已显示，说明已经在 chat 页
-            // 这种情况通常是 history 栈堆积了多个 chat 条目（修复前的存量）
-            // 自动继续后退，直到找到 login 条目或不同状态的条目
-            const alreadyOnChat = chatPage.style.display === 'flex' &&
-                                  (!kbPage || kbPage.style.display === 'none');
-            if (alreadyOnChat) {
-                // 已在 chat 页又后退到 chat 条目，说明 history 栈有堆积
-                // 自动继续后退，让用户一次后退就能回到 login
-                // 使用 setTimeout(0) 避免在 popstate 处理过程中递归调用 history.back
-                setTimeout(() => history.back(), 0);
-                return;
+            // [BUG FIX] 检测是否是 hideKbPage 主动触发的后退（从 kb 返回 chat）
+            // 这种情况下绝不连续后退，直接显示 chat 页即可
+            const fromKbNavigation = window._navigatingFromKb === true;
+            if (fromKbNavigation) {
+                // 清除标志位
+                window._navigatingFromKb = false;
+            } else {
+                // 不是 hideKbPage 触发的，是用户主动点浏览器后退按钮
+                // 此时 kbPage 本来就是关的，又后退到 chat 条目
+                // 说明 history 栈有修复前的存量堆积（[login, chat, chat, ...]）
+                // 但为了安全，不自动连续后退（可能误伤其他场景）
+                // 只做正常的 UI 切换，让用户多按几次后退到达 login
+                // 这样保证不会错误地退出登录
             }
             loginModal.classList.remove('show');
             chatPage.style.display = 'flex';
@@ -3151,6 +3152,9 @@ function hideKbPage() {
     // 改用 history.back() 让浏览器自动 pop kb 条目，回到前一个 chat 条目
     // popstate 监听器会接管 UI 切换（幂等，重复执行无副作用）
     if (history.state && history.state.page === 'kb') {
+        // 设置标志位，告诉 popstate 监听器这是 hideKbPage 主动触发的后退
+        // 不要误判为"chat→chat 堆积"而连续后退（那会错误地退到 login 页）
+        window._navigatingFromKb = true;
         history.back();
     }
 }
