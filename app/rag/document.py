@@ -1367,7 +1367,9 @@ def split_documents(docs: list, chunk_size: int = 800, chunk_overlap: int = 200,
     if is_markdown:
         md_chunks = _split_markdown_by_headers(docs, chunk_size, chunk_overlap)
         if md_chunks is not None:
-            # MD 切片成功，给每个 chunk 分配索引
+            # [空内容修复] MD 路径同样过滤空 chunk
+            md_chunks = [c for c in md_chunks if c.page_content is not None and str(c.page_content).strip()]
+            # 给每个 chunk 分配索引
             for i, chunk in enumerate(md_chunks):
                 chunk.metadata["chunk_index"] = i
                 chunk.metadata["chunk_type"] = "md_section"
@@ -1439,7 +1441,28 @@ def split_documents(docs: list, chunk_size: int = 800, chunk_overlap: int = 200,
     for i, chunk in enumerate(merged_chunks):
         chunk.metadata["chunk_index"] = i
 
-    return merged_chunks
+    # [空内容修复] 入库前过滤掉 page_content 为 None 或纯空白的 chunk。
+    # 这些脏数据进入 ChromaDB 后，下次 similarity_search_with_score 时
+    # langchain 会尝试构造 Document(page_content=None) 触发 Pydantic 校验
+    # 失败，导致整个查询挂掉。这里在源头拦截。
+    clean_chunks = []
+    for chunk in merged_chunks:
+        pc = chunk.page_content
+        if pc is None:
+            logger.warning(f"[空内容修复] 跳过 page_content=None 的 chunk（source={chunk.metadata.get('source', 'unknown')}）")
+            continue
+        if not str(pc).strip():
+            logger.warning(f"[空内容修复] 跳过空内容 chunk（source={chunk.metadata.get('source', 'unknown')}）")
+            continue
+        clean_chunks.append(chunk)
+
+    # 如果过滤后 chunk 数变化，重新分配 chunk_index 保持连续
+    if len(clean_chunks) != len(merged_chunks):
+        for i, chunk in enumerate(clean_chunks):
+            chunk.metadata["chunk_index"] = i
+        logger.info(f"[空内容修复] 过滤空 chunk: 原 {len(merged_chunks)} → 新 {len(clean_chunks)}")
+
+    return clean_chunks
 
 
 def index_document(file_path: str, filename: str = None, agent_id: str = None) -> dict:
@@ -1940,6 +1963,70 @@ def _bm25_keyword_search(query: str, top_k: int = 10, agent_id: str = None) -> l
     return scored[:top_k]
 
 
+def _safe_similarity_search_with_score(vector_store, query: str, k: int = 4) -> list[tuple]:
+    """[空内容修复] 安全的向量检索，绕过 LangChain 的 Pydantic 校验失败问题。
+
+    问题：ChromaDB 旧数据或 rebuild 残留可能存在 page_content=None 的记录，
+    langchain_chroma 的 similarity_search_with_score 会调用 _results_to_docs
+    把每条记录反序列化为 Document(page_content=...)，Pydantic 校验字符串类型
+    失败时抛 `1 validation error for Document page_content Input should be
+    a valid string`，导致整个 query 检索失败。
+
+    修复：直接调用底层 collection.query() 拿原始 dict，过滤掉 content 为
+    None/空的记录，再用过滤后的数据构造 LangChain Document 返回。
+
+    Args:
+        vector_store: Chroma 实例
+        query: 查询文本
+        k: 返回数量
+
+    Returns:
+        list[tuple[Document, float]]: (doc, distance) 列表，已过滤空内容
+    """
+    try:
+        collection = vector_store._collection
+        query_embedding = vector_store._embedding_function.embed_query(query)
+        result = collection.query(
+            query_embeddings=[query_embedding],
+            n_results=k * 2,  # 多取一些，过滤后可能不足 k
+            include=["documents", "metadatas", "distances"],
+        )
+    except Exception as e:
+        # 如果走底层也失败（如 embedding 不可用），抛回去让上层处理降级
+        raise e
+
+    from langchain_core.documents import Document
+
+    out = []
+    if not result or not result.get("ids") or not result["ids"][0]:
+        return out
+
+    ids = result["ids"][0]
+    documents = result.get("documents", [[]])[0]
+    metadatas = result.get("metadatas", [[]])[0]
+    distances = result.get("distances", [[]])[0]
+
+    for i, doc_id in enumerate(ids):
+        # 关键过滤：跳过 page_content 为 None 或纯空白的脏记录
+        raw_content = documents[i] if i < len(documents) else None
+        if raw_content is None:
+            continue
+        content = str(raw_content).strip() if raw_content else ""
+        if not content:
+            continue
+
+        meta = metadatas[i] if i < len(metadatas) and metadatas[i] else {}
+        distance = float(distances[i]) if i < len(distances) and distances[i] is not None else 1.0
+
+        doc = Document(page_content=content, metadata=meta or {})
+        out.append((doc, distance))
+
+        if len(out) >= k:
+            break
+
+    return out
+
+
 def _reciprocal_rank_fusion(vector_results: list[dict], keyword_results: list[dict], k: int = 60) -> list[dict]:
     """
     [#9] 倒数排名融合（Reciprocal Rank Fusion）
@@ -2051,7 +2138,10 @@ def search_documents(query: str, top_k: int = 3, agent_id: str = None) -> list[d
         seen_contents = set()
         for q in queries:
             try:
-                raw = vector_store.similarity_search_with_score(q, k=top_k * 2)
+                # [空内容修复] 改用 _safe_similarity_search_with_score 绕过
+                # langchain Pydantic 校验失败问题（page_content=None 时会抛
+                # `1 validation error for Document`）。
+                raw = _safe_similarity_search_with_score(vector_store, q, k=top_k * 2)
                 for doc, score in raw:
                     # 用内容前100字去重
                     content_key = doc.page_content[:100]
@@ -2184,8 +2274,10 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
     async def _do_vector_search(q: str) -> list[tuple]:
         """对单个查询执行向量搜索，返回 (doc, score) 列表"""
         try:
-            raw = await asyncio.to_thread(vector_store.similarity_search_with_score, q, k=top_k * 2)
-            return [(doc, score) for doc, score in raw]
+            # [空内容修复] 改用 _safe_similarity_search_with_score 绕过
+            # langchain Pydantic 校验失败问题（page_content=None 时会抛
+            # `1 validation error for Document`）。
+            return await asyncio.to_thread(_safe_similarity_search_with_score, vector_store, q, top_k * 2)
         except Exception as e:
             logger.warning(f"向量检索失败: {e}")
             if _is_embedding_error(e):
