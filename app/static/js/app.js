@@ -1353,6 +1353,19 @@ window.addEventListener('popstate', function(e) {
     if (e.state && e.state.page === 'chat') {
         // 回到聊天页 - 从知识库页返回 或 从登录页前进
         if (currentUser && authToken) {
+            // [BUG FIX] 检测当前是否已经在 chat 页面（避免 chat→chat 后退时无意义的 UI 重绘）
+            // 如果 kbPage 已隐藏 且 chatPage 已显示，说明已经在 chat 页
+            // 这种情况通常是 history 栈堆积了多个 chat 条目（修复前的存量）
+            // 自动继续后退，直到找到 login 条目或不同状态的条目
+            const alreadyOnChat = chatPage.style.display === 'flex' &&
+                                  (!kbPage || kbPage.style.display === 'none');
+            if (alreadyOnChat) {
+                // 已在 chat 页又后退到 chat 条目，说明 history 栈有堆积
+                // 自动继续后退，让用户一次后退就能回到 login
+                // 使用 setTimeout(0) 避免在 popstate 处理过程中递归调用 history.back
+                setTimeout(() => history.back(), 0);
+                return;
+            }
             loginModal.classList.remove('show');
             chatPage.style.display = 'flex';
             document.body.classList.add('body-chat-mode');
@@ -3132,9 +3145,13 @@ function hideKbPage() {
     // 恢复侧边栏
     if (sidebar) sidebar.style.display = '';
     updateCenteredMode();
-    // [BUG FIX] 确保历史状态回到chat（手动关闭知识库时）
+    // [BUG FIX] 使用 history.back() 弹出 kb 条目，而不是 replaceState 堆积 chat 条目
+    // 旧代码 replaceState({page:'chat'}) 会把 kb 条目替换成 chat，导致 history 栈
+    // 堆积大量 chat 条目，用户点后退时在 chat→chat 间跳转，UI 不变，看起来"没反应"
+    // 改用 history.back() 让浏览器自动 pop kb 条目，回到前一个 chat 条目
+    // popstate 监听器会接管 UI 切换（幂等，重复执行无副作用）
     if (history.state && history.state.page === 'kb') {
-        history.replaceState({page: 'chat'}, '');
+        history.back();
     }
 }
 
