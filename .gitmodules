@@ -1,0 +1,4 @@
+[submodule "skills/8d-skill"]
+	path = skills/8d-skill
+	url = https://github.com/cy556-like/8DSKILLNEW.git
+	branch = main
