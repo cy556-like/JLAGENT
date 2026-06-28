@@ -1254,10 +1254,14 @@ def generate_fmea_report_tool(
         manufacturing_site: PFMEA 专用，制造地址
         team: 可选，团队成员（如「张三（设计）/李四（质量）/王五（工艺）」）
         template: 模板 slug，可选值: electronic-ecm/mechanical-assembly/surface-treatment/painting-coating/generic-fmea
-        failure_chains: 可选，动态失效链内容（JSON 字符串）。当 Agent 已在对话中推演了具体失效链时传入，覆盖模板预填。
+        failure_chains: **核心参数（强烈推荐传入）**，动态失效链内容（JSON 字符串）。
+            🔴🔴🔴 **重要**：只要 Agent 在对话中输出过任何失效链（FE/FM/FC），就**必须**通过此参数传入，否则文件内容会用模板预填值，与对话输出不一致！
+            - 对话中输出 N 条失效链 → failure_chains 必须传 N 条
+            - 对话中说的 FE/FM/FC/S/O/D 必须与 failure_chains 中的字段完全一致
+            - 唯一例外：用户只给产品+客户、Agent 没做任何失效链分析时可不传
             格式: [{"fe":"失效影响","fm":"失效模式","fc":"失效起因","s":8,"o":5,"d":6,"ap":"H","pc":"预防控制","dc":"探测控制"},...]
-            每条失效链必须包含 fe/fm/fc 三个字段，s/o/d 为 1-10 整数（可选，缺失时由脚本根据 hint 填充）
-            如果为空字符串，则使用模板预填的失效链（electronic-ecm 模板预填 7 条，generic-fmea 预填 5 条）
+            每条失效链必须包含 fe/fm/fc 三个字段，s/o/d 为 1-10 整数（强烈推荐填写，缺失时用模板 hint 值）
+            如果为空字符串，则使用模板预填的失效链（electronic-ecm 模板预填 7 条，generic-fmea 预填 5 条）—— ⚠️ 这通常不是你想要的，请优先传入对话中推演的失效链
         auto_fill: 可选，自动填充模式（默认 False）。当用户明确说「你帮我填」「给我示例」「看一下范例」时设为 True。
             启用后脚本会把所有 ____ 空白替换为合理示例值：
             - FMEA 团队表姓名：张伟/李娜/刘强/陈静/赵磊/周敏/王芳/孙健（按角色分配）
