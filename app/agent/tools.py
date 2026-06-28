@@ -1090,6 +1090,10 @@ def generate_8d_report_tool(
         logger.info(f"[8D] 调用 generate_8d.py: {' '.join(cmd[:6])}...")
 
         # 执行脚本（超时 60 秒）
+        # 🔴 Windows 编码修复：强制子进程用 UTF-8 输出，避免 GBK/CP936 导致中文乱码
+        eightd_env = os.environ.copy()
+        eightd_env['PYTHONIOENCODING'] = 'utf-8'
+        eightd_env['PYTHONUTF8'] = '1'
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -1098,6 +1102,7 @@ def generate_8d_report_tool(
             encoding='utf-8',
             errors='replace',
             cwd=project_root,
+            env=eightd_env,
         )
 
         if result.returncode != 0:
@@ -1396,6 +1401,10 @@ def generate_fmea_report_tool(
         logger.info(f"[FMEA] 调用 generate_fmea.py: fmea_type={fmea_type_upper}, template={template}")
 
         # 执行脚本（超时 60 秒）
+        # 🔴 Windows 编码修复：强制子进程用 UTF-8 输出，避免 GBK/CP936 导致中文乱码
+        fmea_env = os.environ.copy()
+        fmea_env['PYTHONIOENCODING'] = 'utf-8'
+        fmea_env['PYTHONUTF8'] = '1'
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -1404,6 +1413,7 @@ def generate_fmea_report_tool(
             encoding='utf-8',
             errors='replace',
             cwd=project_root,
+            env=fmea_env,
         )
 
         if result.returncode != 0:
