@@ -284,6 +284,117 @@ def _load_8d_skill_context(skill: str, user_input: str) -> str:
         return ""
 
 
+def _load_fmea_skill_context(skill: str, user_input: str) -> str:
+    """加载 PFMEA/DFMEA skill 的完整工作流上下文（SKILL.md + 匹配到的 template.json + references/）。
+
+    当用户在前端点击「PFMEA/DFMEA分析」按钮后，selectedSkill='pfmea-dfmea-skill' 会被透传到此处。
+    本函数：
+      1. 读取 skills/pfmea-dfmea-skill/SKILL.md 全文
+      2. 从 user_input 提取关键字，按模板匹配规则选择模板 slug
+         (electronic-ecm / mechanical-assembly / surface-treatment / painting-coating / generic-fmea)
+      3. 读取 skills/pfmea-dfmea-skill/templates/<slug>/template.json
+      4. 读取 skills/pfmea-dfmea-skill/references/ 下的 3 个参考文件
+      5. 拼成上下文文本返回，用于追加到 system_prompt 末尾
+
+    任何异常都返回空字符串，确保不阻断主对话流程。
+    """
+    if not skill or skill != "pfmea-dfmea-skill":
+        return ""
+
+    try:
+        import os
+        import json
+        import logging
+        logger_ = logging.getLogger(__name__)
+
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        skill_md_path = os.path.join(project_root, "skills", "pfmea-dfmea-skill", "SKILL.md")
+        templates_dir = os.path.join(project_root, "skills", "pfmea-dfmea-skill", "templates")
+
+        if not os.path.isfile(skill_md_path):
+            logger_.warning(f"FMEA skill SKILL.md not found at {skill_md_path}")
+            return ""
+
+        with open(skill_md_path, "r", encoding="utf-8") as f:
+            skill_md_content = f.read()
+
+        # ---------- 模板匹配 ----------
+        # 规则：先按产品类别关键字匹配，无法明确分类时用 generic-fmea 兜底
+        TEMPLATE_RULES = [
+            (["ECU", "控制器", "传感器", "线束", "PCB", "电路", "电子", "PCBA", "IC", "LED", "模组"], "electronic-ecm"),
+            (["齿轮", "轴承", "紧固件", "螺栓", "轴", "壳体", "装配", "机械", "传动"], "mechanical-assembly"),
+            (["电镀", "热处理", "氧化", "表面处理", "淬火", "渗碳", "氮化"], "surface-treatment"),
+            (["喷涂", "电泳", "漆面", "涂装", "喷漆", "漆膜"], "painting-coating"),
+        ]
+
+        matched_slug = None
+        for keywords, slug in TEMPLATE_RULES:
+            if any(kw in user_input for kw in keywords):
+                matched_slug = slug
+                break
+        if matched_slug is None:
+            matched_slug = "generic-fmea"
+
+        template_path = os.path.join(templates_dir, matched_slug, "template.json")
+        if not os.path.isfile(template_path):
+            logger_.warning(f"FMEA template.json not found at {template_path}")
+            return (
+                "\n\n## 🔧 PFMEA/DFMEA Skill 完整工作流（已加载 SKILL.md）\n\n"
+                + skill_md_content
+                + "\n\n## ⚠️ 模板未找到\n"
+                + f"未找到模板 {matched_slug} 的 template.json，请按 SKILL.md 通用流程执行 FMEA 报告。\n"
+            )
+
+        with open(template_path, "r", encoding="utf-8") as f:
+            template_json = json.load(f)
+
+        template_str = json.dumps(template_json, ensure_ascii=False, indent=2)
+
+        # ---------- 加载 references/ 参考资料 ----------
+        references_dir = os.path.join(project_root, "skills", "pfmea-dfmea-skill", "references")
+        reference_files = [
+            ("fmea_seven_step_guide.md", "FMEA 七步法详细指南（每步 DFMEA+PFMEA 双视角、目的、关键活动、输出物、常见错误、IATF 关联）"),
+            ("sod_scoring_tables.md", "S/O/D 评分表（10 级）+ 完整 1000 种 AP 组合矩阵 + 评分一致性检查"),
+            ("failure_chain_examples.md", "失效链案例库（5 个行业 × 3 个案例 = 15 个 FE→FM→FC 真实案例）"),
+        ]
+        references_section = "\n### references/ 参考资料\n"
+        for ref_name, ref_desc in reference_files:
+            ref_path = os.path.join(references_dir, ref_name)
+            if os.path.isfile(ref_path):
+                try:
+                    with open(ref_path, "r", encoding="utf-8") as rf:
+                        ref_content = rf.read()
+                    references_section += f"\n#### {ref_name}\n> {ref_desc}\n\n{ref_content}\n"
+                    logger_.info(f"FMEA skill loaded reference: {ref_name} ({len(ref_content)} chars)")
+                except Exception as ref_e:
+                    logger_.warning(f"Failed to read reference {ref_name}: {ref_e}")
+            else:
+                logger_.warning(f"Reference file not found: {ref_path}")
+
+        # ---------- 拼上下文 ----------
+        context = (
+            "\n\n## 🔧 PFMEA/DFMEA Skill 完整工作流（已加载 SKILL.md + 匹配模板 + references/）\n\n"
+            f"### 已匹配模板：{matched_slug}\n"
+            f"\n### SKILL.md 完整内容\n\n{skill_md_content}\n\n"
+            f"### 匹配模板 template.json（请直接使用预填的失效链 FE/FM/FC、PC/DC 控制措施，不要凭经验编造）\n\n```json\n{template_str}\n```\n"
+            f"{references_section}\n"
+            "### 执行要求\n"
+            "1. 严格按 SKILL.md 中的「四、七步法详细说明」执行，禁止跳过任何一步（规划准备/结构分析/功能分析/失效分析/风险分析/优化/结果文件化）\n"
+            "2. 失效链必须使用 template.json 中 failure_chains_template 的预填内容（FE→FM→FC 三级结构），可基于用户实际信息微调，但不得凭空编造\n"
+            "3. S/O/D 评分必须基于 references/sod_scoring_tables.md 的标准评分表，不可主观臆断\n"
+            "4. AP 必须由 S/O/D 组合查表得出（references/sod_scoring_tables.md 的 1000 种组合矩阵），严禁使用 RPN\n"
+            "5. PC（预防控制）与 DC（探测控制）必须分离，不可混写\n"
+            "6. S=9-10 自动识别为 CC（关键特性），S=8 且 AP=H/M 自动识别为 SC（特殊特性），同步到控制计划\n"
+            "7. 输出七步法完整内容到对话（结构树/功能树/失效链/风险评级/优化措施），最后调用 generate_fmea_report_tool 生成 xlsx + docx 文件\n"
+        )
+        logger_.info(f"FMEA skill context loaded: SKILL.md ({len(skill_md_content)} chars) + template {matched_slug} ({len(template_str)} chars) + references (3 files)")
+        return context
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).exception(f"Failed to load FMEA skill context: {e}")
+        return ""
+
+
 
 
 def _get_date_message() -> HumanMessage:
@@ -871,7 +982,8 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
         custom_prompt = _inject_current_date(SYSTEM_PROMPT)
     # [方案B] 8D skill 注入：把 SKILL.md + 匹配模板追加到 system prompt 末尾
     if skill:
-        skill_ctx = _load_8d_skill_context(skill, user_input)
+        # 8D/FMEA skill 注入：尝试两个加载器，命中哪个就用哪个
+        skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
         if skill_ctx:
             custom_prompt = custom_prompt + skill_ctx
     
@@ -976,9 +1088,9 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         custom_system_prompt = _inject_current_date(_build_agent_prompt(agent_task, web_search=web_search, agent_id=agent_id))
     else:
         custom_system_prompt = _inject_current_date(SYSTEM_PROMPT_WITH_WEB_SEARCH if web_search else SYSTEM_PROMPT)
-    # [方案B] 8D skill 注入
+    # [方案B] 8D/FMEA skill 注入
     if skill:
-        skill_ctx = _load_8d_skill_context(skill, user_input)
+        skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
         if skill_ctx:
             custom_system_prompt = custom_system_prompt + skill_ctx
     if agent_task:
@@ -1149,9 +1261,9 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     chat_system_prompt = _inject_current_date(_build_chat_prompt(agent_task) if agent_task else CHAT_SYSTEM_PROMPT)
-    # [方案B] 8D skill 注入
+    # [方案B] 8D/FMEA skill 注入
     if skill:
-        skill_ctx = _load_8d_skill_context(skill, user_input)
+        skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
         if skill_ctx:
             chat_system_prompt = chat_system_prompt + skill_ctx
     # [质量修复] 不再因简单问题降级模型（fast_mode 会切换到更弱的模型）
@@ -1240,7 +1352,7 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
             mm_text = " ".join([p.get("text", "") for p in multimodal_content if isinstance(p, dict)])
         except Exception:
             mm_text = ""
-        skill_ctx = _load_8d_skill_context(skill, mm_text)
+        skill_ctx = _load_8d_skill_context(skill, mm_text) or _load_fmea_skill_context(skill, mm_text)
         if skill_ctx:
             system_prompt = system_prompt + skill_ctx
 

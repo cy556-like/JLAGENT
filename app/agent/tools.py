@@ -1195,6 +1195,294 @@ def generate_8d_report_tool(
 
 
 
+# ===== FMEA 报告生成工具（PFMEA/DFMEA） =====
+
+@tool
+def generate_fmea_report_tool(
+    fmea_type: str,
+    product: str,
+    customer: str,
+    project_no: str = "",
+    system_level: str = "",
+    design_responsibility: str = "",
+    process_name: str = "",
+    process_steps: str = "",
+    manufacturing_site: str = "",
+    team: str = "",
+    template: str = "generic-fmea",
+    failure_chains: str = "",
+    auto_fill: bool = False
+) -> str:
+    """生成专业的汽车行业 FMEA 报告（PFMEA 或 DFMEA，同时生成 xlsx 和 docx 两个文件）。
+
+    【用途】当用户需要 FMEA 分析报告（设计 FMEA / 过程 FMEA / 潜在失效模式分析）时使用。
+    【典型触发】
+    - 「生成DFMEA」「做PFMEA」「FMEA分析」
+    - 「设计FMEA」「过程FMEA」「潜在失效模式分析」
+    - 「APQP阶段FMEA」「PPAP提交FMEA」「控制计划关联FMEA」
+    - 「严重度S/频度O/探测度D评分」「AP行动优先级」「特殊特性CC/SC识别」
+    【为什么必须用这个工具而不是 export_xlsx_tool】
+    - generate_fmea_report_tool 会调用 skills/pfmea-dfmea-skill/scripts/generate_fmea.py 脚本
+    - 生成的 xlsx 带 7 个 Sheet（表头/结构/功能/失效/风险/优化/矩阵）、AP 热力图、CC/SC 高亮等专业样式
+    - 生成的 docx 是标准 FMEA Word 文档（7 章 + 签名栏），可直接提交客户
+    - export_xlsx_tool 只能生成简单表格，无样式，不适合 FMEA 报告
+    【FMEA 类型选择】
+    - 用户提到「产品设计」「零部件设计」「DFMEA」「设计FMEA」→ fmea_type="DFMEA"
+    - 用户提到「生产工艺」「制造过程」「PFMEA」「过程FMEA」「工序」→ fmea_type="PFMEA"
+    - 同时提到设计+过程 / 用户未明示 → 必须先追问用户
+    【模板选择规则】
+    - 含 ECU/控制器/传感器/线束/PCB/电路 → electronic-ecm
+    - 含 齿轮/轴承/紧固件/轴/壳体/装配 → mechanical-assembly
+    - 含 电镀/热处理/氧化/表面处理/淬火 → surface-treatment
+    - 含 喷涂/电泳/漆面/涂装/喷漆 → painting-coating
+    - 其他/无法明确分类 → generic-fmea
+
+    Args:
+        fmea_type: FMEA 类型，必填，"DFMEA" 或 "PFMEA"（大小写敏感）
+        product: 产品名称（如「前保险杠总成」「ECU 控制单元」「前照灯 LED 模组」）
+        customer: 客户名称（如「比亚迪」「一汽大众」）
+        project_no: 可选，项目编号（如「P2026-0123」）
+        system_level: DFMEA 专用，系统层级（整车/系统/子系统/组件/零件）
+        design_responsibility: DFMEA 专用，设计责任方（自有设计/供应商设计/联合设计）
+        process_name: PFMEA 专用，工艺名称（如「注塑成型」「焊接」「装配」）
+        process_steps: PFMEA 专用，工序清单（逗号分隔，如「原料干燥,注塑成型,去毛刺,外观检验,包装」）
+        manufacturing_site: PFMEA 专用，制造地址
+        team: 可选，团队成员（如「张三（设计）/李四（质量）/王五（工艺）」）
+        template: 模板 slug，可选值: electronic-ecm/mechanical-assembly/surface-treatment/painting-coating/generic-fmea
+        failure_chains: 可选，动态失效链内容（JSON 字符串）。当 Agent 已在对话中推演了具体失效链时传入，覆盖模板预填。
+            格式: [{"fe":"失效影响","fm":"失效模式","fc":"失效起因","s":8,"o":5,"d":6,"ap":"H","pc":"预防控制","dc":"探测控制"},...]
+            每条失效链必须包含 fe/fm/fc 三个字段，s/o/d 为 1-10 整数（可选，缺失时由脚本根据 hint 填充）
+            如果为空字符串，则使用模板预填的失效链（electronic-ecm 模板预填 7 条，generic-fmea 预填 5 条）
+        auto_fill: 可选，自动填充模式（默认 False）。当用户明确说「你帮我填」「给我示例」「看一下范例」时设为 True。
+            启用后脚本会把所有 ____ 空白替换为合理示例值：
+            - FMEA 团队表姓名：张伟/李娜/刘强/陈静/赵磊/周敏/王芳/孙健（按角色分配）
+            - 联系方式：内部分机号 8001-8009
+            - 优化措施责任人：按措施序号轮换分配
+            - 优化措施截止日期：当前日期 + 7/10/14/21/30/45/60 天
+            - 签名栏：化名 + 当天日期
+            - 表头信息：FMEA 编号 / 编制人 / 审核人 / 批准人 / 项目编号 等
+            注意：S/O/D 评分仍由模板 hint 决定，AP 由 get_ap_priority 自动计算（不采用 ap_hint，避免不一致）
+    """
+    import subprocess
+    import sys
+    import json as _json
+    import re as _re
+
+    # ── JSON 修复函数（与 generate_8d_report_tool 共用同一套修复逻辑） ──
+    def _repair_llm_json(raw: str) -> str:
+        """尝试修复 LLM 生成的常见 JSON 格式错误。"""
+        s = raw.strip()
+        if not s:
+            return s
+        s = s.replace('\u201c', '"').replace('\u201d', '"')
+        s = s.replace('\u2018', "'").replace('\u2019', "'")
+        s = s.replace('\uff0c', ',').replace('\uff08', '(').replace('\uff09', ')')
+        s = s.replace('\uff1a', ':')
+        s = s.replace("'", '"')
+        for _ in range(10):
+            new_s = _re.sub(
+                r'("(?:[^"\\]|\\.)*")\s*:\s*("(?:[^"\\]|\\.)*")\s*:',
+                r'\1:\2,',
+                s
+            )
+            if new_s == s:
+                break
+            s = new_s
+        s = _re.sub(r'\}\s*\{', '},{', s)
+        s = _re.sub(r'\]\s*\[', '],[', s)
+        s = _re.sub(r'\}\s*\[', '},[', s)
+        s = _re.sub(r'\]\s*\{', '],{', s)
+        s = _re.sub(r',\s*\]', ']', s)
+        s = _re.sub(r',\s*\}', '}', s)
+        def _fix_newlines_in_strings(m):
+            content = m.group(1)
+            content = content.replace('\n', '\\n').replace('\r', '')
+            return '"' + content + '"'
+        s = _re.sub(r'"((?:[^"\\]|\\.)*)"', _fix_newlines_in_strings, s, flags=_re.DOTALL)
+        s = _re.sub(r'([{\[,])\s*([a-zA-Z_]\w*)\s*:', r'\1"\2":', s)
+        s = _re.sub(r'"\s+"([a-zA-Z_])', r'",\1', s)
+        return s
+
+    def _safe_parse_json(raw: str, label: str = ""):
+        """安全解析 JSON，先尝试原始解析，失败则尝试修复后解析。"""
+        if not raw or not raw.strip():
+            return None
+        raw = raw.strip()
+        try:
+            return _json.loads(raw)
+        except _json.JSONDecodeError:
+            pass
+        try:
+            repaired = _repair_llm_json(raw)
+            result = _json.loads(repaired)
+            logger.info(f"[FMEA] {label} JSON 修复成功（原始格式有误，已自动修复）")
+            return result
+        except _json.JSONDecodeError as e2:
+            logger.warning(f"[FMEA] {label} JSON 修复后仍无法解析: {e2}")
+            try:
+                import ast
+                py_str = raw.replace('true', 'True').replace('false', 'False').replace('null', 'None')
+                result = ast.literal_eval(py_str)
+                logger.info(f"[FMEA] {label} JSON 通过 ast.literal_eval 修复成功")
+                return result
+            except Exception:
+                logger.warning(f"[FMEA] {label} JSON 所有修复方式均失败，忽略该参数")
+                return None
+
+    try:
+        # 参数校验
+        fmea_type_upper = (fmea_type or "").strip().upper()
+        if fmea_type_upper not in ("DFMEA", "PFMEA"):
+            return f"【FMEA报告生成失败】fmea_type 必须是 'DFMEA' 或 'PFMEA'，当前值：'{fmea_type}'"
+
+        # 定位 generate_fmea.py 脚本路径
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        script_path = os.path.join(project_root, "skills", "pfmea-dfmea-skill", "scripts", "generate_fmea.py")
+
+        if not os.path.exists(script_path):
+            return f"【FMEA报告生成失败】未找到脚本: {script_path}。请确认 skills/pfmea-dfmea-skill/scripts/generate_fmea.py 已部署（git submodule update --init --recursive）。"
+
+        # 输出目录：data/export/（与 8D 报告相同的下载端点）
+        export_dir = os.path.join(settings.DATA_DIR, "export")
+        os.makedirs(export_dir, exist_ok=True)
+
+        # 构造命令
+        cmd = [
+            sys.executable,
+            script_path,
+            "--fmea-type", fmea_type_upper,
+            "--product", product,
+            "--customer", customer,
+            "--template", template,
+            "--output-dir", export_dir,
+        ]
+
+        # 可选参数
+        if project_no:
+            cmd.extend(["--project-no", project_no])
+        if system_level:
+            cmd.extend(["--system-level", system_level])
+        if design_responsibility:
+            cmd.extend(["--design-responsibility", design_responsibility])
+        if process_name:
+            cmd.extend(["--process-name", process_name])
+        if process_steps:
+            cmd.extend(["--process-steps", process_steps])
+        if manufacturing_site:
+            cmd.extend(["--manufacturing-site", manufacturing_site])
+        if team:
+            cmd.extend(["--team", team])
+
+        # 动态失效链
+        has_dynamic_chains = False
+        if failure_chains and failure_chains.strip():
+            parsed_chains = _safe_parse_json(failure_chains, "failure_chains")
+            if parsed_chains is not None:
+                # 写入临时 JSON 文件传给脚本（避免命令行参数过长）
+                import tempfile
+                chains_file = os.path.join(export_dir, f"_fmea_chains_{int(__import__('time').time())}.json")
+                with open(chains_file, "w", encoding="utf-8") as cf:
+                    _json.dump(parsed_chains, cf, ensure_ascii=False, indent=2)
+                cmd.extend(["--failure-chains-json", chains_file])
+                logger.info(f"[FMEA] 启用动态失效链覆盖（{len(parsed_chains) if isinstance(parsed_chains, list) else 1} 条）")
+                has_dynamic_chains = True
+            else:
+                logger.warning(f"[FMEA] failure_chains JSON 无法解析（已尝试修复），继续用模板预填失效链")
+
+        if auto_fill:
+            cmd.append("--auto-fill")
+            logger.info(f"[FMEA] 启用自动填充模式（用户明确要求示例）")
+
+        logger.info(f"[FMEA] 调用 generate_fmea.py: fmea_type={fmea_type_upper}, template={template}")
+
+        # 执行脚本（超时 60 秒）
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            encoding='utf-8',
+            errors='replace',
+            cwd=project_root,
+        )
+
+        if result.returncode != 0:
+            err_msg = result.stderr[-500:] if result.stderr else "无 stderr 输出"
+            return f"【FMEA报告生成失败】脚本执行错误（返回码 {result.returncode}）：\n{err_msg}"
+
+        # 从 stdout 解析生成的文件路径
+        stdout = result.stdout or ""
+        # 脚本输出格式：[OK] Excel 报告已生成：/path/to/FMEA_XXX.xlsx
+        #               [OK] Word 报告已生成：/path/to/FMEA_XXX.docx
+        xlsx_match = _re.search(r'Excel 报告已生成[：:]\s*(.+?\.xlsx)', stdout)
+        docx_match = _re.search(r'Word 报告已生成[：:]\s*(.+?\.docx)', stdout)
+
+        if not (xlsx_match and docx_match):
+            return f"【FMEA报告生成失败】脚本执行成功但未找到文件路径。\nstdout: {stdout[-500:]}\nstderr: {result.stderr[-500:] if result.stderr else ''}"
+
+        xlsx_path = xlsx_match.group(1).strip()
+        docx_path = docx_match.group(1).strip()
+        xlsx_name = os.path.basename(xlsx_path)
+        docx_name = os.path.basename(docx_path)
+
+        # 验证文件确实存在
+        xlsx_exists = os.path.exists(xlsx_path)
+        docx_exists = os.path.exists(docx_path)
+        logger.info(f"[FMEA] 文件验证: xlsx={'存在' if xlsx_exists else '不存在'} ({xlsx_path}), docx={'存在' if docx_exists else '不存在'} ({docx_path})")
+
+        if not xlsx_exists and not docx_exists:
+            return f"【FMEA报告生成失败】脚本报告成功但文件不存在。\nxlsx_path: {xlsx_path}\ndocx_path: {docx_path}"
+
+        # 生成下载链接（前端会拦截这些 URL）
+        xlsx_url = f"/api/v1/documents/export-download/{xlsx_name}" if xlsx_name else ""
+        docx_url = f"/api/v1/documents/export-download/{docx_name}" if docx_name else ""
+
+        # 提取统计信息
+        chains_count_match = _re.search(r'失效链数[：:]\s*(\d+)', stdout)
+        ap_h_match = _re.search(r'AP=H[：:]\s*(\d+)', stdout)
+        ap_m_match = _re.search(r'AP=M[：:]\s*(\d+)', stdout)
+        ap_l_match = _re.search(r'AP=L[：:]\s*(\d+)', stdout)
+        chains_count = chains_count_match.group(1) if chains_count_match else "?"
+        ap_h = ap_h_match.group(1) if ap_h_match else "?"
+        ap_m = ap_m_match.group(1) if ap_m_match else "?"
+        ap_l = ap_l_match.group(1) if ap_l_match else "?"
+
+        # 明确告诉 Agent 实际启用了哪些模式
+        modes_enabled = []
+        if has_dynamic_chains:
+            modes_enabled.append("动态失效链覆盖（已填入您推演的 FE/FM/FC）")
+        if auto_fill:
+            modes_enabled.append("自动填充模式（人名/日期/责任人已填示例值）")
+        modes_str = " + ".join(modes_enabled) if modes_enabled else "默认模式（空白处留 ____）"
+
+        xlsx_line = f"📄 Excel 文件：{xlsx_name}\n下载链接：{xlsx_url}\n" if xlsx_exists else f"📄 Excel 文件：生成失败\n"
+        docx_line = f"📝 Word 文件：{docx_name}\n下载链接：{docx_url}\n" if docx_exists else f"📝 Word 文件：生成失败\n"
+
+        return (
+            f"【FMEA报告生成成功】\n"
+            f"FMEA 类型：{fmea_type_upper}\n"
+            f"匹配模板：{template}\n"
+            f"启用模式：{modes_str}\n"
+            f"失效链统计：共 {chains_count} 条，AP=H（高优先级）{ap_h} 条 / AP=M（中）{ap_m} 条 / AP=L（低）{ap_l} 条\n\n"
+            f"{xlsx_line}"
+            f"说明：7 Sheet 完整 Excel（表头/结构/功能/失效/风险/优化/矩阵），含 AP 热力图 + CC/SC 高亮 + 自动行高\n\n"
+            f"{docx_line}"
+            f"说明：标准 FMEA Word 文档（7 章 + 签名栏），可编辑后使用\n\n"
+            f"【重要】你必须在回复中完整展示上面的下载链接 URL，前端依赖这些 URL 生成下载按钮。\n"
+            f"【重要】不要在对话中重复输出 FMEA 报告的完整内容，用户可以直接下载文件查看。\n"
+            f"只需简要告诉用户：报告已生成、匹配了什么模板、{'空白处已填示例值' if auto_fill else '空白处需补充实际数据'}。"
+        )
+
+    except subprocess.TimeoutExpired:
+        return "【FMEA报告生成失败】脚本执行超时（60秒），请检查 openpyxl/python-docx 是否已安装，或缩减输入内容后重试。"
+    except FileNotFoundError as e:
+        return f"【FMEA报告生成失败】Python 解释器未找到: {e}"
+    except Exception as e:
+        logger.exception("[FMEA] generate_fmea_report_tool 异常")
+        return f"【FMEA报告生成失败】{type(e).__name__}: {str(e)}"
+
+
+
 # ===== [#12] 外部系统集成工具 =====
 
 @tool
@@ -1483,6 +1771,7 @@ BASE_TOOLS = [
     export_document_tool,
     export_xlsx_tool,
     generate_8d_report_tool,
+    generate_fmea_report_tool,
 ]
 
 # 联网搜索工具（按需启用）

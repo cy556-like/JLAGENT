@@ -2824,15 +2824,21 @@ function selectSkill(skillId) {
     // 显示技能模式提示栏
     const bar = document.getElementById('skillModeBar');
     const text = document.getElementById('skillModeText');
+    const hint = document.getElementById('skillModeHint') || document.querySelector('.kb-bar-hint');
     if (bar && text) {
         if (skillId === '8d-skill') {
             text.textContent = '8D SKILL模式';
+            if (hint) hint.textContent = '当前启用了8D技能，AI将按8D流程生成报告';
+        } else if (skillId === 'pfmea-dfmea-skill') {
+            text.textContent = 'PFMEA/DFMEA SKILL模式';
+            if (hint) hint.textContent = '当前启用了PFMEA/DFMEA技能，AI将按FMEA七步法生成报告';
         }
         bar.style.display = '';
     }
     // 同步隐藏知识库上传模式（互斥）
     if (agentKbUploadMode) toggleAgentKbUpload();
-    showToast('已启用 8D SKILL 模式');
+    const skillDisplay = skillId === 'pfmea-dfmea-skill' ? 'PFMEA/DFMEA' : '8D';
+    showToast('已启用 ' + skillDisplay + ' SKILL 模式');
 }
 
 function clearSkill() {

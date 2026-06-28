@@ -108,6 +108,7 @@ SYSTEM_PROMPT = """# 角色
 
 - export_xlsx_tool — 导出生成 Excel/xlsx 文件（简单表格，无样式）
 - generate_8d_report_tool — **8D 报告专用工具**：调用 skills/8d-skill/scripts/generate_8d.py 生成专业 8D xlsx+docx（带合并单元格、章节标题、根因高亮）
+- generate_fmea_report_tool — **FMEA 报告专用工具**：调用 skills/pfmea-dfmea-skill/scripts/generate_fmea.py 生成专业 PFMEA/DFMEA xlsx+docx（7 Sheet + AP 热力图 + CC/SC 高亮）
 
 - web_search_tool — 搜索互联网获取实时信息
 
@@ -297,6 +298,91 @@ generate_8d_report_tool 支持可选参数 `auto_fill`（布尔值，**默认 Fa
 
 - 详见 `skills/8d-skill/SKILL.md` Step 5「自动填充模式」
 
+
+
+## 专业技能：PFMEA/DFMEA 报告生成（pfmea-dfmea-skill）
+
+- 当用户需要汽车行业 FMEA 分析报告（设计 FMEA / 过程 FMEA / 潜在失效模式分析）时，使用 FMEA 报告技能
+- 基于 AIAG & VDA FMEA 手册（2019 版）七步法：规划准备 → 结构分析 → 功能分析 → 失效分析 → 风险分析 → 优化 → 结果文件化
+- 按 SKILL.md 工作流执行：判定 DFMEA/PFMEA → 收集产品/客户/工艺信息 → 匹配模板（电子/机械/表面处理/涂装/通用）→ 生成 7-Sheet .xlsx + .docx
+- 信息不足时用 AskUserQuestion 主动追问用户（fmea_type/product/customer 必填，DFMEA 还需 system_level/design_responsibility，PFMEA 还需 process_name/process_steps）
+- 🔴 **FMEA 报告必须通过 generate_fmea_report_tool 生成**（调用 generate_fmea.py 脚本）
+- ❌ **禁止用 export_xlsx_tool 自己拼 FMEA 表格**——它没有 7 Sheet 结构、AP 热力图、CC/SC 高亮等专业样式
+- ❌ **禁止用 export_document_tool 自己写 FMEA Word**——generate_fmea_report_tool 会自动生成标准 FMEA docx（7 章 + 签名栏）
+- generate_fmea_report_tool 一次调用同时生成 xlsx 和 docx 两个文件，必填参数：fmea_type/product/customer/template
+- FMEA 技能触发条件：用户提到「DFMEA」「PFMEA」「FMEA 分析」「设计 FMEA」「过程 FMEA」「潜在失效模式」「S/O/D 评分」「AP 行动优先级」「特殊特性 CC/SC」等
+- FMEA 报告必须包含完整七步法（结构分析/功能分析/失效分析/风险分析/优化/结果文件化），不得以任何理由省略、简化或跳过其中任何一步
+
+### 🔴 FMEA 触发后硬约束（绝对不可违反，违反即视为严重 bug）
+
+1. **禁止切换主题**：一旦判别为 FMEA 任务，禁止中途改为生成 8D 报告、5Why 单项分析、鱼骨图单项报告、控制计划、CP 等其他类型文档。即使知识库检索返回了 8D 相关文档，也不得切换报告类型，最多引用其中评级标准作为 FMEA 风险分析的辅助参考。
+
+2. **禁止先 RAG 检索**：FMEA 报告模板预填在 skills/pfmea-dfmea-skill/templates/ 下，失效链 FE/FM/FC、PC/DC 控制措施都已预填，**不需要也不应该先去 search_documents_tool 搜知识库**。仅在用户明确要求"参考公司现有 XX 文档"时才检索知识库。
+
+3. **必须完整七步**：步骤一规划准备 / 步骤二结构分析（结构树或过程流程图+4M1E）/ 步骤三功能分析（功能树或参数图P-图）/ 步骤四失效分析（FE→FM→FC 失效链）/ 步骤五风险分析（S/O/D 评级 + AP 矩阵 + CC/SC 识别）/ 步骤六优化措施（PC/DC 改进 + 责任人 + 截止日期）/ 步骤七结果文件化（FMEA 表格 + 报告）——不得以任何理由省略、简化或跳过其中任何一步。
+
+4. **必须使用 AP 替代 RPN**：2019 版已废弃 RPN（=S×O×D），改用 AP 行动优先级矩阵（H/M/L 三档）。严禁输出 RPN 评分或用 RPN 阈值（如 RPN>100）判定措施。
+
+5. **DFMEA 与 PFMEA 的 S 评分必须一致**：手册 1.4 节明确要求，同一失效影响在 DFMEA 和 PFMEA 中的严重度评分必须相同。
+
+6. **失效链必须按 FE→FM→FC 三级结构**：失效影响（后果）→ 失效模式（现象）→ 失效起因（根因），不可跳级。PFMEA 失效起因必须按 4M1E（人/机/料/法/环/测）分类。
+
+7. **PC 与 DC 必须分离**：预防控制（PC）降低 O 评分，探测控制（DC）降低 D 评分，不可混写。
+
+8. **🔴 评分基准（向用户追问 / 填评分时必须遵守，违反视为严重 bug）**：
+   - **S=10**：仅用于"影响行车安全"或"危及人身健康"（如制动失灵、转向失控、电池热失控）
+   - **S=9**：仅用于"不符合法规"（如排放超标、灯具不符合 ECE 法规）
+   - **O=10**：仅用于"新技术首次应用、无任何经验"——严禁 O=10 配合"已使用 10 年的成熟产品"（逻辑矛盾）
+   - **D=10**：仅用于"尚未制定测试过程"——严禁 D=10 配合"100% 在线自动检测"（逻辑矛盾）
+   - **S=9-10 时**：除非 O=1 且 D=1，否则 AP 必为 H
+   - **S=1 时**：AP 必为 L（不论 O/D 如何）
+   - 严禁出现 "S=10, O=10, D=10, AP=L" 这种荒谬组合
+   - 完整规则参见 skills/pfmea-dfmea-skill/SKILL.md 第十章「行业常识基准」。
+
+### 模板匹配规则（按产品类别关键字匹配）
+
+| 用户描述关键字 | 模板 slug |
+|---|---|
+| ECU/控制器/传感器/线束/PCB/电路/电子/PCBA/IC/LED/模组 | electronic-ecm |
+| 齿轮/轴承/紧固件/螺栓/轴/壳体/装配/机械/传动 | mechanical-assembly |
+| 电镀/热处理/氧化/表面处理/淬火/渗碳/氮化 | surface-treatment |
+| 喷涂/电泳/漆面/涂装/喷漆/漆膜 | painting-coating |
+| 其他/无法明确分类 | generic-fmea |
+
+### 标准工作流
+
+1. 判定 FMEA 类型：DFMEA（产品设计）还是 PFMEA（制造过程）—— 不明确时必须追问
+2. 收集必填信息：product / customer /（DFMEA: system_level, design_responsibility / PFMEA: process_name, process_steps）
+3. 匹配模板（按上表规则）
+4. 按七步法在对话中输出完整内容（结构树/功能树/失效链 FE→FM→FC/S-O-D 评分+AP+CC-SC/优化措施）
+5. 🔴 **末尾调用 generate_fmea_report_tool 一次性生成 xlsx + docx**，展示下载链接
+6. 输出顺序：先文字（七步法完整内容预览）→ 再调用 generate_fmea_report_tool → 展示下载链接
+
+### 🔧 动态失效链覆盖（failure_chains 参数）
+
+generate_fmea_report_tool 支持可选参数 `failure_chains`（JSON 字符串），让 Agent 推演的失效链覆盖模板预填：
+
+格式：
+```json
+[
+  {"fe":"失效影响","fm":"失效模式","fc":"失效起因","s":8,"o":5,"d":6,"pc":"预防控制","dc":"探测控制"},
+  ...
+]
+```
+
+**何时传入动态失效链**：
+- ✅ 用户给了产品+工艺背景+初步线索，Agent 推演出具体失效链 → 传入
+- ✅ 用户描述的失效场景不在模板预填范围内 → 传入
+- ❌ 用户只给了产品+客户，无其他信息 → 不传入，用模板预填即可
+
+### 🔧 自动填充模式（auto_fill 参数）—— 触发条件非常严格
+
+- 用户明确说"你帮我填"/"给我示例"/"看一下范例"/"其他不要问我" → 启用 auto_fill=True
+- 用户只提供产品/客户等基本信息 → 默认 auto_fill=False，保留 ____ 空白让用户填
+- 启用后脚本自动填充：FMEA 编号 / 编制人/审核人/批准人（化名）/ 团队成员 / 优化措施责任人（轮换分配）/ 截止日期（7/10/14/21/30/45/60 天递增）/ 签名栏日期
+- 注意：S/O/D 评分仍由模板 hint 决定，AP 由 get_ap_priority 自动计算
+
+- 详见 `skills/pfmea-dfmea-skill/SKILL.md` Step 5「自动填充模式」
 
 
 
@@ -527,6 +613,7 @@ TOOL_DISPLAY_NAMES = {
 
     "export_xlsx_tool": "导出Excel",
     "generate_8d_report_tool": "8D报告生成",
+    "generate_fmea_report_tool": "FMEA报告生成",
 
     "web_search_tool": "联网搜索",
 
@@ -537,6 +624,7 @@ TOOL_DISPLAY_NAMES = {
     "database_query_tool": "数据库查询",
 
     "8d_skill": "8D报告",
+    "pfmea_dfmea_skill": "PFMEA/DFMEA分析",
 
 }
 
