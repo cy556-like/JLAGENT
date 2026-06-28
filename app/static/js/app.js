@@ -2824,7 +2824,7 @@ function selectSkill(skillId) {
     // 显示技能模式提示栏
     const bar = document.getElementById('skillModeBar');
     const text = document.getElementById('skillModeText');
-    const hint = document.getElementById('skillModeHint') || document.querySelector('.kb-bar-hint');
+    const hint = document.getElementById('skillModeHint');
     if (bar && text) {
         if (skillId === '8d-skill') {
             text.textContent = '8D SKILL模式';
