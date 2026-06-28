@@ -2830,8 +2830,8 @@ function selectSkill(skillId) {
             text.textContent = '8D SKILL模式';
             if (hint) hint.textContent = '当前启用了8D技能，AI将按8D流程生成报告';
         } else if (skillId === 'pfmea-dfmea-skill') {
-            text.textContent = 'PFMEA/DFMEA SKILL模式';
-            if (hint) hint.textContent = '当前启用了PFMEA/DFMEA技能，AI将按FMEA七步法生成报告';
+            text.textContent = 'FMEA SKILL模式';
+            if (hint) hint.textContent = '当前启用了FMEA技能，AI将按FMEA七步法生成报告';
         }
         bar.style.display = '';
     }
