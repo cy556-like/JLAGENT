@@ -370,34 +370,67 @@ generate_8d_report_tool 支持可选参数 `auto_fill`（布尔值，**默认 Fa
 
 3. **失效链内容必须一致**：对话中说的 FE/FM/FC/S/O/D/AP/PC/DC 必须与 `failure_chains` 参数中的字段**完全一致**，不得在传参时偷懒省略或简化。
 
-4. **唯一例外**：用户只给了产品+客户，Agent 没有在对话中输出任何失效链分析（只是机械套模板），此时可以不传 `failure_chains`。但只要 Agent 做了任何分析（哪怕只输出 1 条失效链），就必须传入。
+4. **优化措施字段必须一起传入**：🔴 **这是最常见的 bug 来源！** Agent 在对话中输出的"优化措施表"（措施类型/措施描述/责任人/截止日期/措施后 S/O/D/AP）必须通过 `failure_chains` 参数的以下字段传入，否则文件的优化措施表会用模板预填值（与对话不一致）：
+   - `measure_type`: 措施类型（如 "PC+DC 改进"/"PC 改进"）
+   - `measure_desc`: 措施描述（① ② ③ 具体内容，**必须与对话中一字不差**）
+   - `measure_owner`: 责任人（如"设计主管"/"焊接工程师"）
+   - `measure_due_date`: 截止日期（如"D+30天"/"2026-07-28"）
+   - `post_s`/`post_o`/`post_d`: 措施后 S/O/D 评分（整数）
+   - `post_ap`: 措施后 AP（H/M/L）
+
+5. **唯一例外**：用户只给了产品+客户，Agent 没有在对话中输出任何失效链分析（只是机械套模板），此时可以不传 `failure_chains`。但只要 Agent 做了任何分析（哪怕只输出 1 条失效链），就必须传入。
 
 **正确流程示例**：
 ```
 Agent 在对话中输出：
   失效链 #1: FE=车辆行驶中断裂... FM=焊缝疲劳开裂... FC=R角过小... S=10/O=4/D=4/AP=H/CC
+            优化措施: PC+DC 改进 | ① 优化焊缝R角≥8mm ② 增加焊缝疲劳仿真验证 | 设计主管 | D+30天 | S=10→10/O=4→3/D=4→3/AP=H→M
   失效链 #2: FE=安装尺寸超差... FM=焊接变形... FC=热输入不均... S=6/O=5/D=6/AP=M
+            优化措施: PC 改进 | ① 优化焊接顺序 ② 设计反变形工装 | 焊接工程师 | D+21天 | S=6→6/O=5→3/D=6→4/AP=M→L
 
-调用工具时 MUST 传入：
+调用工具时 MUST 传入（含优化措施字段）：
   generate_fmea_report_tool(
       fmea_type="DFMEA",
       product="前副车架焊接总成",
       customer="比亚迪",
       template="mechanical-assembly",
-      failure_chains='[{"fe":"车辆行驶中断裂...","fm":"焊缝疲劳开裂...","fc":"R角过小...","s":10,"o":4,"d":4,"pc":"...","dc":"..."},{"fe":"安装尺寸超差...","fm":"焊接变形...","fc":"热输入不均...","s":6,"o":5,"d":6,"pc":"...","dc":"..."}]'
+      failure_chains='[
+        {
+          "fe":"车辆行驶中断裂...","fm":"焊缝疲劳开裂...","fc":"R角过小...",
+          "s":10,"o":4,"d":4,"ap":"H","pc":"...","dc":"...",
+          "measure_type":"PC+DC 改进",
+          "measure_desc":"① 优化焊缝R角≥8mm ② 增加焊缝疲劳仿真验证",
+          "measure_owner":"设计主管",
+          "measure_due_date":"D+30天",
+          "post_s":10,"post_o":3,"post_d":3,"post_ap":"M"
+        },
+        {
+          "fe":"安装尺寸超差...","fm":"焊接变形...","fc":"热输入不均...",
+          "s":6,"o":5,"d":6,"ap":"M","pc":"...","dc":"...",
+          "measure_type":"PC 改进",
+          "measure_desc":"① 优化焊接顺序 ② 设计反变形工装",
+          "measure_owner":"焊接工程师",
+          "measure_due_date":"D+21天",
+          "post_s":6,"post_o":3,"post_d":4,"post_ap":"L"
+        }
+      ]'
   )
 ```
 
 **错误示例（严禁）**：
 ```
-# ❌ 错误：对话输出了 4 条失效链，但调用工具时没传 failure_chains
+# ❌ 错误 1：对话输出了 4 条失效链，但调用工具时没传 failure_chains
 generate_fmea_report_tool(
-    fmea_type="DFMEA",
-    product="前副车架焊接总成",
-    customer="比亚迪",
-    template="mechanical-assembly"
+    fmea_type="DFMEA", product="前副车架焊接总成", customer="比亚迪", template="mechanical-assembly"
 )
 # 后果：文件里是模板预填的 7 条失效链，与对话中的 4 条不一致
+
+# ❌ 错误 2：传了 failure_chains 但没传优化措施字段（measure_desc/measure_owner/measure_due_date/post_s 等）
+generate_fmea_report_tool(
+    fmea_type="DFMEA", product="...", customer="...", template="...",
+    failure_chains='[{"fe":"...","fm":"...","fc":"...","s":10,"o":4,"d":4,"ap":"H"}]'
+)
+# 后果：失效链数量对了，但优化措施表用模板预填的 pc+dc 拼接，责任人是 ____，措施后是 —，与对话不一致
 ```
 
 ### 🔧 动态失效链覆盖（failure_chains 参数）
