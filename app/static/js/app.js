@@ -86,18 +86,30 @@ function sortAgentsByFixedOrder(agents) {
     });
 }
 
+// 数字郑老师专属人物页（信息摘自《郑伟老师简历》）
+const ZHENG_TEACHER_PROFILE = {
+    name: '郑伟老师',
+    badge: 'AI分身',
+    tags: ['质量与精益管理专家', '北京全质科技创办人', '浙江大学EMBA'],
+    meta: '整车质量管理20年 · 丰田、长城、吉利、北汽实战经验',
+    sections: {
+        expertise: {
+            label: '专业擅长',
+            content: '质量管理、精益生产、生产技术管理、组织建设与人才培养；掌握丰田管理精髓，精通VDA6.3过程审核，擅长搭建并运转企业质量管理体系。'
+        },
+        profile: {
+            label: '个人简介',
+            content: '自2001年加入天津一汽丰田起，从事整车厂质量管理工作20年；先后在长城汽车、吉利汽车、北汽集团担任重要管理职务，拥有质量、技术、生产与企业运营实战经验。现为北京全质科技股份有限公司创办人、股东。'
+        },
+        honors: {
+            label: '获奖荣誉',
+            content: '2011年获吉利最高贡献奖“书福奖”；2013年受聘中国质量认证中心青岛分中心机动车技术专家；2017年受聘中国质量技术联盟专家；2018年在《中国质量》发表《吉利改善方式之供应商改善平台》。'
+        }
+    }
+};
+
 // 每个智能体的欢迎页配置（名称、描述、推荐问题）
 const AGENT_WELCOME_CONFIG = {
-    'digital-zheng-teacher-agent': {
-        name: '数字郑老师',
-        desc: '面向质量改进与精益工作的专业辅导、方法答疑、案例复盘和知识传承。',
-        questions: [
-            { label: '能力介绍', question: '郑老师，请介绍一下你能为质量改进和精益工作提供哪些帮助？' },
-            { label: '问题分析辅导', question: '郑老师，请指导我如何系统分析一个现场质量问题。' },
-            { label: '改进方案评审', question: '郑老师，请帮我评审这份改进方案的逻辑和可执行性。' },
-            { label: '案例复盘方法', question: '郑老师，怎样组织一次有效的质量问题复盘？' },
-        ]
-    },
     'dfmea-risk-agent': {
         name: '整车制造过程改进工作助手',
         desc: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。',
@@ -1564,6 +1576,15 @@ function updateWelcomeContent() {
     const welcomeEl = document.getElementById('welcomeCenter');
     if (!welcomeEl) return;
 
+    const isZhengTeacher = currentAgentId === DIGITAL_TEACHER_AGENT_ID;
+    welcomeEl.classList.toggle('zheng-profile-mode', isZhengTeacher);
+    const chatContent = welcomeEl.closest('.chat-content');
+    if (chatContent) chatContent.classList.toggle('zheng-welcome-active', isZhengTeacher);
+    if (isZhengTeacher) {
+        renderZhengTeacherWelcome(welcomeEl);
+        return;
+    }
+
     const config = currentAgentId ? getAgentWelcomeConfig(currentAgentId) : null;
 
     if (config) {
@@ -1697,6 +1718,62 @@ function updateWelcomeContent() {
             </div>
         `;
     }
+}
+
+// 数字郑老师不显示关键词问题，使用人物资料卡专属欢迎页。
+// 用户发送第一条消息后，updateCenteredMode 会自动隐藏整个欢迎页。
+function renderZhengTeacherWelcome(welcomeEl) {
+    const profile = ZHENG_TEACHER_PROFILE;
+    const defaultSection = profile.sections.expertise;
+    const tagsHtml = profile.tags
+        .map(tag => `<span class="zheng-profile-tag">${escapeHtml(tag)}</span>`)
+        .join('');
+    const tabsHtml = Object.entries(profile.sections)
+        .map(([key, section], index) => `
+            <button class="zheng-profile-tab${index === 0 ? ' active' : ''}"
+                    type="button" role="tab" aria-selected="${index === 0 ? 'true' : 'false'}"
+                    data-profile-tab="${escapeHtml(key)}"
+                    onclick="showZhengProfileTab(this, '${escapeHtml(key)}')">
+                ${escapeHtml(section.label)}
+            </button>`)
+        .join('');
+
+    welcomeEl.innerHTML = `
+        <section class="zheng-profile-welcome" aria-label="郑伟老师AI分身介绍">
+            <div class="zheng-profile-stage">
+                <div class="zheng-profile-card">
+                    <img class="zheng-profile-avatar" src="/static/images/zheng-wei-avatar.jpg" alt="郑伟老师头像">
+                    <div class="zheng-profile-heading">
+                        <h2>${escapeHtml(profile.name)}</h2>
+                        <span class="zheng-ai-badge">${escapeHtml(profile.badge)}</span>
+                    </div>
+                    <div class="zheng-profile-tags">${tagsHtml}</div>
+                    <p class="zheng-profile-meta">${escapeHtml(profile.meta)}</p>
+                    <div class="zheng-profile-tabs" role="tablist" aria-label="郑伟老师资料分类">
+                        ${tabsHtml}
+                    </div>
+                    <p class="zheng-profile-copy" id="zhengProfileContent" role="tabpanel">${escapeHtml(defaultSection.content)}</p>
+                </div>
+            </div>
+            <div class="zheng-profile-greeting">
+                <h3>我是郑伟老师AI分身</h3>
+                <p>有任何质量改进、精益、生产技术与制造运营提升方面的问题，直接问我吧</p>
+            </div>
+        </section>
+    `;
+}
+
+function showZhengProfileTab(button, sectionKey) {
+    const section = ZHENG_TEACHER_PROFILE.sections[sectionKey];
+    const content = document.getElementById('zhengProfileContent');
+    if (!button || !section || !content) return;
+
+    document.querySelectorAll('.zheng-profile-tab').forEach(tab => {
+        const active = tab === button;
+        tab.classList.toggle('active', active);
+        tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    });
+    content.textContent = section.content;
 }
 
 // 点击快捷问题：填入输入框（不自动发送），用户可编辑后发送
