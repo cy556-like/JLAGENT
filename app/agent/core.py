@@ -767,6 +767,25 @@ def _cleanup_stale_graph_cache():
     if stale_keys:
         logger.info(f"[缓存清理] 清理了 {len(stale_keys)} 个过期 Agent Graph 缓存（>{_AGENT_GRAPH_CACHE_TTL}s未使用）")
 
+
+DIGITAL_ZHENG_AGENT_ID = "digital-zheng-teacher-agent"
+DIGITAL_ZHENG_AGENT_TASK = """你是“郑伟老师AI分身”，面向贵阳吉利汽车的质量改进、精益管理、生产技术与制造运营提升工作，负责专业答疑、方法辅导、案例复盘和知识传承。
+
+## 身份强制规则
+- 你必须始终自称“郑伟老师AI分身”，绝不自称“小智”“企业智能助手”或其他名称
+- 即使用户只输入问候、标点或非常简短的内容，也必须保持郑伟老师AI分身的身份
+- 用户询问你是谁时，直接说明你是郑伟老师AI分身，并简要介绍你在质量改进、精益管理和制造运营方面能够提供的帮助
+- 不要照搬通用企业助手的欢迎语，也不要主动罗列员工查询、GitHub、邮件、数据库等与郑老师身份无关的通用能力
+
+请始终优先检索本助手独立知识库中的资料后回答专业问题，并明确区分知识库事实与通用建议。"""
+
+
+def _resolve_agent_task(agent_task: str = None, agent_id: str = None) -> str:
+    """按智能体ID补全关键角色，防止前端任务字段缺失时退回通用“小智”身份。"""
+    if agent_id == DIGITAL_ZHENG_AGENT_ID:
+        return DIGITAL_ZHENG_AGENT_TASK
+    return agent_task or ""
+
 def _build_agent_prompt(agent_task: str, web_search: bool = False, agent_id: str = None) -> str:
     """根据智能体的任务描述构建专属系统提示词
     
@@ -778,6 +797,7 @@ def _build_agent_prompt(agent_task: str, web_search: bool = False, agent_id: str
     
     新增：注入该智能体的关键词问题列表，让模型知道何时自动导出文件。
     """
+    agent_task = _resolve_agent_task(agent_task, agent_id)
     base_prompt = SYSTEM_PROMPT_WITH_WEB_SEARCH if web_search else SYSTEM_PROMPT
     
     # 注入该智能体的关键词问题列表
@@ -851,13 +871,14 @@ def _build_agent_prompt(agent_task: str, web_search: bool = False, agent_id: str
         # [Token优化] 用自定义角色替换默认"小智"身份，避免双份角色文本
         old_identity = "你是一位名为「小智」的智能助手，在企业场景下专精于文档和员工信息查询，同时也能回答通用问题，并具备 GitHub 操作、邮件发送、数据库查询等能力。"
         if old_identity in result:
-            result = result.replace(old_identity, custom_task)
+            result = result.replace(old_identity, agent_task)
         return result
     else:
         return custom_header + base_prompt
 
-def _build_chat_prompt(agent_task: str) -> str:
+def _build_chat_prompt(agent_task: str, agent_id: str = None) -> str:
     """根据智能体任务描述构建Chat模式的系统提示词"""
+    agent_task = _resolve_agent_task(agent_task, agent_id)
     return f"""{agent_task}
 
 ## 核心原则
@@ -973,9 +994,10 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     reset_search_count()  # 每轮新对话重置搜索计数
+    resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
     
-    if agent_task:
-        custom_prompt = _inject_current_date(_build_agent_prompt(agent_task, web_search=web_search, agent_id=agent_id))
+    if resolved_agent_task:
+        custom_prompt = _inject_current_date(_build_agent_prompt(resolved_agent_task, web_search=web_search, agent_id=agent_id))
     elif web_search:
         custom_prompt = _inject_current_date(SYSTEM_PROMPT_WITH_WEB_SEARCH)
     else:
@@ -992,14 +1014,14 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
         history = get_session_history(session_id)
         recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
         all_messages = recent_messages + [HumanMessage(content=user_input)]
-        chat_prompt = _inject_current_date(_build_chat_prompt(agent_task) if agent_task else CHAT_SYSTEM_PROMPT)
+        chat_prompt = _inject_current_date(_build_chat_prompt(resolved_agent_task, agent_id=agent_id) if resolved_agent_task else CHAT_SYSTEM_PROMPT)
         result = llm.invoke([SystemMessage(content=chat_prompt)] + all_messages)
         full_response = result.content
         history.add_message(HumanMessage(content=user_input))
         history.add_message(AIMessage(content=full_response))
         return full_response
 
-    agent = get_agent(web_search=web_search)
+    agent = get_agent_with_prompt(custom_prompt, web_search=web_search)
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     all_messages = recent_messages + [HumanMessage(content=user_input)]
@@ -1068,6 +1090,7 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     reset_search_count()  # 每轮新对话重置搜索计数
+    resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
     
     # [BUG FIX v6] 获取或创建 session 级取消事件（自动取消上一个幽灵任务）
     cancel_event = _get_or_create_cancel_event(session_id)
@@ -1078,14 +1101,14 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         mode = "chat"
     
     if mode == "chat":
-        async for chunk in _chat_mode_stream(user_input, session_id, deep_think=deep_think, web_search=web_search, agent_id=agent_id, agent_task=agent_task, skill=skill):
+        async for chunk in _chat_mode_stream(user_input, session_id, deep_think=deep_think, web_search=web_search, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill):
             yield chunk
         _cleanup_session_cancel(session_id)  # [v6] 正常结束清理
         return
 
     # Agent模式：走Agent工具调用
-    if agent_task:
-        custom_system_prompt = _inject_current_date(_build_agent_prompt(agent_task, web_search=web_search, agent_id=agent_id))
+    if resolved_agent_task:
+        custom_system_prompt = _inject_current_date(_build_agent_prompt(resolved_agent_task, web_search=web_search, agent_id=agent_id))
     else:
         custom_system_prompt = _inject_current_date(SYSTEM_PROMPT_WITH_WEB_SEARCH if web_search else SYSTEM_PROMPT)
     # [方案B] 8D/FMEA skill 注入
@@ -1093,7 +1116,7 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
         if skill_ctx:
             custom_system_prompt = custom_system_prompt + skill_ctx
-    if agent_task:
+    if resolved_agent_task:
         agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search)
     else:
         agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search)
@@ -1260,7 +1283,8 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
     """
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
-    chat_system_prompt = _inject_current_date(_build_chat_prompt(agent_task) if agent_task else CHAT_SYSTEM_PROMPT)
+    resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
+    chat_system_prompt = _inject_current_date(_build_chat_prompt(resolved_agent_task, agent_id=agent_id) if resolved_agent_task else CHAT_SYSTEM_PROMPT)
     # [方案B] 8D/FMEA skill 注入
     if skill:
         skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
@@ -1327,6 +1351,7 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
     """多模态流式对话：支持图片+文本的混合消息"""
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
+    resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
     current_model = settings.LLM_MODEL
     use_model = current_model
     if current_model not in VISION_MODELS:
@@ -1344,8 +1369,8 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
     all_messages = recent_messages + [human_msg]
 
     system_prompt = _inject_current_date(SYSTEM_PROMPT)
-    if agent_task:
-        system_prompt = _inject_current_date(f"{SYSTEM_PROMPT}\n\n## 你的专属任务\n{agent_task}\n\n请优先围绕上述任务回答用户问题，并在需要时调用相关工具搜索知识库。")
+    if resolved_agent_task:
+        system_prompt = _inject_current_date(_build_agent_prompt(resolved_agent_task, agent_id=agent_id))
     # [方案B] 8D skill 注入（multimodal 路径）：从 multimodal_content 提取文本作为 user_input 用于模板匹配
     if skill:
         try:
@@ -1372,7 +1397,7 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
         try:
             text_parts = [p["text"] for p in multimodal_content if p["type"] == "text"]
             fallback_text = "\n".join(text_parts) + "\n\n[注意：图片分析失败，请用文字描述你的问题]"
-            async for event in chat_stream_generator(fallback_text, session_id):
+            async for event in chat_stream_generator(fallback_text, session_id, agent_id=agent_id, agent_task=resolved_agent_task):
                 yield event
             return
         except Exception as e2:

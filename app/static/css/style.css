@@ -1799,13 +1799,27 @@ html { scroll-behavior: smooth; }
 .zheng-profile-tab:hover,
 .zheng-profile-tab.active { color: #26344f; font-weight: 600; }
 .zheng-profile-tab.active::after { background: #4d76df; }
-.welcome-center .zheng-profile-copy {
+.zheng-profile-panel {
     min-height: 66px;
+    padding-top: 7px;
+    text-align: left;
+}
+.welcome-center .zheng-profile-copy {
     margin: 7px 0 0;
     color: #66738a;
     font-size: 13px;
     line-height: 1.75;
     text-align: left;
+}
+.zheng-wechat-image {
+    display: block;
+    width: min(100%, 300px);
+    height: auto;
+    margin: 14px auto 2px;
+    border: 1px solid rgba(92, 109, 148, 0.13);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 10px 28px rgba(65, 88, 145, 0.12);
 }
 .zheng-profile-greeting {
     padding: 18px 18px 0;
@@ -3556,7 +3570,9 @@ html { scroll-behavior: smooth; }
     .zheng-profile-tags { gap: 5px; }
     .zheng-profile-tag { padding: 4px 6px; font-size: 11px; }
     .zheng-profile-tab { font-size: 13px; }
-    .welcome-center .zheng-profile-copy { min-height: 0; font-size: 12px; }
+    .zheng-profile-panel { min-height: 0; }
+    .welcome-center .zheng-profile-copy { font-size: 12px; }
+    .zheng-wechat-image { width: min(100%, 270px); margin-top: 10px; border-radius: 10px; }
     .zheng-profile-greeting { padding: 13px 6px 0; }
     .zheng-profile-greeting h3 { font-size: 20px; }
     .welcome-center .zheng-profile-greeting p { font-size: 14px; }

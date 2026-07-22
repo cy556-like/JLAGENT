@@ -94,16 +94,18 @@ const ZHENG_TEACHER_PROFILE = {
     meta: '整车质量管理20年 · 丰田、长城、吉利、北汽实战经验',
     sections: {
         expertise: {
-            label: '专业擅长',
-            content: '质量管理、精益生产、生产技术管理、组织建设与人才培养；掌握丰田管理精髓，精通VDA6.3过程审核，擅长搭建并运转企业质量管理体系。'
+            label: '如何训练AI分身',
+            content: '训练AI分身，是一个将顶尖专家的经验“复制”并“进化”为可持续工作的数字智能体的过程。把郑老师数以十万字的问答、讲课等实战经验和资料，转为结构化的数据，并通过通用大模型进行训练和微调，形成一个“数据驱动、持续进化”的数字智能体。'
         },
         profile: {
             label: '个人简介',
             content: '自2001年加入天津一汽丰田起，从事整车厂质量管理工作20年；先后在长城汽车、吉利汽车、北汽集团担任重要管理职务，拥有质量、技术、生产与企业运营实战经验。现为北京全质科技股份有限公司创办人、股东。'
         },
-        honors: {
-            label: '获奖荣誉',
-            content: '2011年获吉利最高贡献奖“书福奖”；2013年受聘中国质量认证中心青岛分中心机动车技术专家；2017年受聘中国质量技术联盟专家；2018年在《中国质量》发表《吉利改善方式之供应商改善平台》。'
+        wechat: {
+            label: '个人微信',
+            content: '如对生产内容产生疑问，相关问题可添加个人微信。',
+            image: '/static/images/zheng-wei-wechat.jpg',
+            imageAlt: '郑伟老师个人微信二维码'
         }
     }
 };
@@ -421,7 +423,7 @@ function forceCorrectAgents() {
     existing.forEach(a => { existingMap[a.id] = a; });
 
     const defaults = {
-        'digital-zheng-teacher-agent': { name: '数字郑老师', task: '你是数字郑老师，面向贵阳吉利汽车质量改进与精益工作，负责专业答疑、方法辅导、案例复盘和知识传承。请始终优先检索本助手独立知识库中的资料后回答问题，并明确区分知识库事实与通用建议。', summary: '质量改进与精益专业辅导' },
+        'digital-zheng-teacher-agent': { name: '数字郑老师', task: '你是郑伟老师AI分身，面向贵阳吉利汽车质量改进与精益工作，负责专业答疑、方法辅导、案例复盘和知识传承。你必须始终自称“郑伟老师AI分身”，绝不自称“小智”“企业智能助手”或其他名称；即使用户只输入问候、标点或简短内容，也要保持郑伟老师AI分身的身份。请始终优先检索本助手独立知识库中的资料后回答专业问题，并明确区分知识库事实与通用建议。', summary: '质量改进与精益专业辅导' },
         'dfmea-risk-agent': { name: '整车制造过程改进工作助手', task: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。', summary: '整车制造过程改进' },
         'part-design-agent': { name: '三电系统质量改进工作助手', task: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。', summary: '三电系统质量改进' },
         'simulation-optimization-agent': { name: '整车评审与AUDIT工作助手', task: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。', summary: '整车评审与AUDIT' },
@@ -1752,7 +1754,9 @@ function renderZhengTeacherWelcome(welcomeEl) {
                     <div class="zheng-profile-tabs" role="tablist" aria-label="郑伟老师资料分类">
                         ${tabsHtml}
                     </div>
-                    <p class="zheng-profile-copy" id="zhengProfileContent" role="tabpanel">${escapeHtml(defaultSection.content)}</p>
+                    <div class="zheng-profile-panel" id="zhengProfileContent" role="tabpanel">
+                        ${renderZhengProfileSection(defaultSection)}
+                    </div>
                 </div>
             </div>
             <div class="zheng-profile-greeting">
@@ -1761,6 +1765,13 @@ function renderZhengTeacherWelcome(welcomeEl) {
             </div>
         </section>
     `;
+}
+
+function renderZhengProfileSection(section) {
+    const imageHtml = section.image
+        ? `<img class="zheng-wechat-image" src="${escapeHtml(section.image)}" alt="${escapeHtml(section.imageAlt || '郑伟老师个人微信二维码')}">`
+        : '';
+    return `<p class="zheng-profile-copy">${escapeHtml(section.content)}</p>${imageHtml}`;
 }
 
 function showZhengProfileTab(button, sectionKey) {
@@ -1773,7 +1784,7 @@ function showZhengProfileTab(button, sectionKey) {
         tab.classList.toggle('active', active);
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
     });
-    content.textContent = section.content;
+    content.innerHTML = renderZhengProfileSection(section);
 }
 
 // 点击快捷问题：填入输入框（不自动发送），用户可编辑后发送
