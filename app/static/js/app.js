@@ -863,6 +863,13 @@ function toggleMyAgents() {
 function updateHeaderKbVisibility() {
     const btn = document.getElementById('headerKbBtn');
     const skillsWrapper = document.getElementById('skillsWrapper');
+    const skillsBtn = document.getElementById('headerSkillsBtn');
+    const skillsText = skillsBtn ? skillsBtn.querySelector('.kb-btn-text') : null;
+    if (skillsBtn) {
+        skillsBtn.title = '质量工具Skills';
+        skillsBtn.setAttribute('aria-label', '质量工具Skills');
+    }
+    if (skillsText) skillsText.textContent = '质量工具Skills';
     if (!btn) return;
     // 只在选中了某个智能体时才显示 header 知识库按钮和 Skills 按钮
     if (currentAgentId) {
