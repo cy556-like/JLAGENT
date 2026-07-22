@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
+AUTO_MODEL_ID = "auto"
+AUTO_MODEL_TARGET = "glm-5.2"
+
 # 显式指定 .env 路径（项目根目录），避免 uvicorn 启动目录不是项目根时找不到 .env
 _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 if not load_dotenv(_env_path):
@@ -18,6 +21,8 @@ if not load_dotenv(_env_path):
 
 # 可用的 LLM 模型列表
 AVAILABLE_MODELS = [
+    # 自动模式（默认）：当前固定指向 GLM-5.2，后续可扩展为按任务路由
+    {"id": AUTO_MODEL_ID, "name": "Auto", "desc": "自动选择模型，当前默认使用 GLM-5.2"},
     # DeepSeek 系列（火山引擎）
     {"id": "DeepSeek-V4-Flash", "name": "DeepSeek-V4-Flash", "desc": "DeepSeek快速版，性价比高"},
     # GLM 系列（火山引擎Ark，与豆包/DeepSeek共用套餐）
@@ -64,7 +69,13 @@ class Settings:
     # LLM 默认配置（阿里云百炼平台，兼容模式代理多家模型）
     LLM_API_KEY: str = os.getenv("LLM_API_KEY", "")
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "glm-5.2")
+    # 新默认值为 Auto。兼容旧部署：若 .env 仍保留旧默认 DeepSeek，则自动迁移到 Auto；
+    # 用户仍可在前端显式选择 DeepSeek。
+    _configured_model = os.getenv("LLM_MODEL", AUTO_MODEL_ID).strip()
+    if _configured_model in ("", "DeepSeek-V4-Flash"):
+        _configured_model = AUTO_MODEL_ID
+    _valid_model_ids = {model["id"] for model in AVAILABLE_MODELS}
+    LLM_MODEL: str = _configured_model if _configured_model in _valid_model_ids else AUTO_MODEL_ID
 
     # LLM 备用配置（主Key失效时自动切换）
     LLM_API_KEY_BACKUP: str = os.getenv("LLM_API_KEY_BACKUP", "")
@@ -122,6 +133,16 @@ class Settings:
 
 
 settings = Settings()
+
+
+def resolve_model_id(model_id: str) -> str:
+    """将前端选择值解析为实际调用的模型ID。"""
+    return AUTO_MODEL_TARGET if model_id == AUTO_MODEL_ID else model_id
+
+
+def get_effective_model() -> str:
+    """获取当前实际调用的模型ID（Auto 当前解析为 GLM-5.2）。"""
+    return resolve_model_id(settings.LLM_MODEL)
 
 
 def set_current_model(model_id: str) -> bool:

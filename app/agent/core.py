@@ -29,7 +29,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.config import settings, VISION_MODELS, DEFAULT_VISION_MODEL, VISION_API_KEY, VISION_BASE_URL, FAST_MODELS, DEEPSEEK_MODELS, VOLCENGINE_MODELS, QWEN_MODELS, MIMO_MODELS, GLM_MODELS
+from app.config import settings, VISION_MODELS, DEFAULT_VISION_MODEL, VISION_API_KEY, VISION_BASE_URL, FAST_MODELS, DEEPSEEK_MODELS, VOLCENGINE_MODELS, QWEN_MODELS, MIMO_MODELS, GLM_MODELS, AUTO_MODEL_ID, resolve_model_id
 from app.agent.tools import ALL_TOOLS, get_tools, set_current_agent_id, set_current_session_id, get_current_session_id, reset_search_count
 from app.agent.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_WEB_SEARCH, CHAT_SYSTEM_PROMPT, get_agent_keywords_section
 from app.memory.manager import get_session_history
@@ -441,9 +441,12 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         short_response: 是否为短回复场景（降低 max_tokens 加速推理）
     """
     global _primary_key_failed
-    model = model_override or settings.LLM_MODEL
+    selected_model = model_override or settings.LLM_MODEL
+    model = resolve_model_id(selected_model)
+    if selected_model == AUTO_MODEL_ID:
+        logger.info(f"Auto 模式：实际使用模型 {model}")
     
-    if fast_mode and not model_override:
+    if fast_mode and not model_override and selected_model != AUTO_MODEL_ID:
         # 从 FAST_MODELS 配置中选取快速模型（如当前模型已是快速模型则不切换）
         if model not in FAST_MODELS and FAST_MODELS:
             fast_model = next(iter(FAST_MODELS))
@@ -460,7 +463,7 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     
     # [DeepSeek] 检测是否为 DeepSeek 模型，自动切换火山引擎 API
     is_deepseek = model in DEEPSEEK_MODELS
-    # [豆包] 检测是否为火山引擎模型（豆包Auto/DeepSeek/豆包），使用火山引擎 Coding API
+    # [火山引擎] 检测是否为火山引擎模型（DeepSeek/豆包/GLM），使用 Coding API
     is_volcengine = model in VOLCENGINE_MODELS
     # [千问] 检测是否为千问模型，使用阿里云 DashScope API
     is_qwen = model in QWEN_MODELS

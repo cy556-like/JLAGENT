@@ -270,7 +270,7 @@
             <div class="header-actions">
 
 
-                <select class="model-select" id="modelSelect" onchange="switchModel()" title="切换模型" aria-label="选择模型"></select>
+                <select class="model-select" id="modelSelect" onchange="switchModel()" title="切换模型" aria-label="选择模型"><option value="auto">Auto</option></select>
 
 
                 <div class="export-wrapper"><button class="header-btn" onclick="toggleExportDropdown()" title="导出对话" aria-label="导出对话" aria-haspopup="true">📥 导出对话</button><div class="export-dropdown" id="exportDropdown" role="menu"><button onclick="exportChat('docx')" role="menuitem">📝 Word</button><button onclick="exportChat('pdf')" role="menuitem">📄 PDF</button><button onclick="exportChat('md')" role="menuitem">📋 Markdown</button></div></div>
@@ -642,7 +642,7 @@ function toggleFaq(el) {
 </script>
 
 
-<script src="/static/js/app.js?v=20260722i"></script>
+<script src="/static/js/app.js?v=20260722j"></script>
 
 
 </body>

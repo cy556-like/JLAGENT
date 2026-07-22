@@ -157,7 +157,7 @@ from app.memory.manager import (
 
 )
 
-from app.config import settings, AVAILABLE_MODELS, get_current_model, set_current_model
+from app.config import settings, AVAILABLE_MODELS, get_current_model, get_effective_model, set_current_model
 
 from app.utils.stats import record_message, record_session, get_stats
 
@@ -2293,13 +2293,13 @@ async def rename_chat_api(chat_id: str, req: RenameRequest):
 
 @router.get("/models", summary="获取可用模型列表")
 
-async def get_models():
+async def get_models(username: str = Depends(get_current_user)):
 
     """获取所有可用的 LLM 模型列表"""
 
     current = get_current_model()
 
-    return {"models": AVAILABLE_MODELS, "current": current}
+    return {"models": AVAILABLE_MODELS, "current": current, "effective": get_effective_model()}
 
 
 
@@ -2307,15 +2307,20 @@ async def get_models():
 
 @router.post("/models/set", summary="切换模型")
 
-async def set_model(req: ModelSetRequest):
+async def set_model(req: ModelSetRequest, username: str = Depends(get_current_user)):
 
     """切换当前使用的 LLM 模型"""
 
     success = set_current_model(req.model_id)
 
     if success:
-
-        return {"success": True, "message": f"已切换到模型: {req.model_id}"}
+        effective = get_effective_model()
+        return {
+            "success": True,
+            "current": get_current_model(),
+            "effective": effective,
+            "message": f"已切换到模型: {req.model_id}（实际使用: {effective}）",
+        }
 
     return {"success": False, "message": f"不支持的模型: {req.model_id}"}
 

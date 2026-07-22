@@ -1298,32 +1298,73 @@ function copyCodeBlock(codeId, btn) {
 }
 
 // ===== Model Management =====
+let currentModelId = 'auto';
+let modelSwitchInProgress = false;
+
 async function loadModels() {
+    const select = document.getElementById('modelSelect');
+    if (!select) return;
     try {
-        const resp = await fetch('/api/v1/models');
+        select.disabled = true;
+        const resp = await fetch('/api/v1/models', { headers: apiHeaders() });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
-        const select = document.getElementById('modelSelect');
+        if (!Array.isArray(data.models) || data.models.length === 0) throw new Error('模型列表为空');
         select.innerHTML = '';
         data.models.forEach(m => {
             const opt = document.createElement('option');
             opt.value = m.id; opt.textContent = m.name; opt.title = m.desc;
-            if (m.id === data.current) opt.selected = true;
             select.appendChild(opt);
         });
-    } catch (e) { console.error('加载模型列表失败', e); }
+        const hasCurrent = data.models.some(m => m.id === data.current);
+        currentModelId = hasCurrent ? data.current : (data.models.some(m => m.id === 'auto') ? 'auto' : data.models[0].id);
+        select.value = currentModelId;
+        select.title = currentModelId === 'auto'
+            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.2'}`
+            : `当前模型：${select.options[select.selectedIndex].textContent}`;
+    } catch (e) {
+        console.error('加载模型列表失败', e);
+        select.innerHTML = '<option value="auto">Auto（加载失败）</option>';
+        select.value = 'auto';
+        currentModelId = 'auto';
+        showToast('模型列表加载失败，请稍后重试');
+    } finally {
+        select.disabled = false;
+    }
 }
 
 async function switchModel() {
-    const modelId = document.getElementById('modelSelect').value;
+    const select = document.getElementById('modelSelect');
+    if (!select || modelSwitchInProgress) return;
+    const modelId = select.value;
+    const previousModelId = currentModelId;
+    if (modelId === previousModelId) return;
+
+    modelSwitchInProgress = true;
+    select.disabled = true;
     try {
         const resp = await fetch('/api/v1/models/set', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ model_id: modelId }) });
         const data = await resp.json();
-        if (data.success) {
-            const select = document.getElementById('modelSelect');
-            const name = select.options[select.selectedIndex].textContent;
-            addMessageToUI('assistant', `✅ 已切换到模型: ${name}`);
-        }
-    } catch (e) { console.error('切换模型失败', e); }
+        if (!resp.ok || !data.success) throw new Error(data.message || `HTTP ${resp.status}`);
+
+        currentModelId = data.current || modelId;
+        select.value = currentModelId;
+        const selectedOption = select.options[select.selectedIndex];
+        const name = selectedOption ? selectedOption.textContent : currentModelId;
+        select.title = currentModelId === 'auto'
+            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.2'}`
+            : `当前模型：${name}`;
+        showToast(currentModelId === 'auto'
+            ? `已切换到 Auto，当前使用 ${data.effective || 'GLM-5.2'}`
+            : `已切换到模型：${name}`);
+    } catch (e) {
+        console.error('切换模型失败', e);
+        select.value = previousModelId;
+        showToast('模型切换失败，已恢复原模型');
+    } finally {
+        modelSwitchInProgress = false;
+        select.disabled = false;
+    }
 }
 
 // ===== Auth =====
@@ -1400,8 +1441,9 @@ async function doLogin() {
                     document.getElementById('headerUserName').textContent = username + ' (管理员)';
                 }
                 loadChatList();
-                loadModels();
+                const modelLoadPromise = loadModels();
                 await syncAgentsFromServer(true);  // [#12] 登录时强制同步一次，内部已调用 rebuildChatIdsFromServer（会GET /chats）
+                await modelLoadPromise;
                 renderMyAgents();
                 updateKbUploadVisibility();
                 updateHeaderKbVisibility();
@@ -1544,8 +1586,9 @@ async function tryAutoLogin() {
             document.getElementById('headerUserName').textContent = data.username;
             document.getElementById('headerUserAvatar').textContent = data.username[0].toUpperCase();
             loadChatList();
-            loadModels();
+            const modelLoadPromise = loadModels();
             await syncAgentsFromServer(true);  // [#12] 自动登录时强制同步
+            await modelLoadPromise;
             renderMyAgents();
             updateKbUploadVisibility();
             updateHeaderKbVisibility();
