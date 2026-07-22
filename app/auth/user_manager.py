@@ -21,8 +21,28 @@ def _load_users() -> dict:
     if os.path.exists(users_file):
         with open(users_file, "r", encoding="utf-8") as f:
             users = json.load(f)
-        # 兼容旧数据：为没有 role 和 password_plain 的用户补全字段
+        # 账号迁移：删除旧 dfsr1，并确保三个正式账号存在且角色正确
         changed = False
+        if "dfsr1" in users:
+            del users["dfsr1"]
+            changed = True
+        required_users = {
+            "admin": ("admin123", "admin"),
+            "adminquanzhi": ("AdminQZ2026!", "admin"),
+            "user01": ("User012026!", "user"),
+        }
+        for username, (default_password, required_role) in required_users.items():
+            if username not in users:
+                users[username] = {
+                    "password_hash": _hash_password(default_password),
+                    "password_plain": default_password,
+                    "role": required_role,
+                }
+                changed = True
+            elif users[username].get("role") != required_role:
+                users[username]["role"] = required_role
+                changed = True
+        # 兼容旧数据：为没有 role 和 password_plain 的其他用户补全字段
         for username, info in users.items():
             if "role" not in info:
                 # admin 用户默认为管理员角色，其他为普通用户
@@ -34,16 +54,21 @@ def _load_users() -> dict:
         if changed:
             _save_users(users)
         return users
-    # 默认管理员账号（bcrypt hash of "admin123"）
+    # 首次启动时创建三个正式账号
     default_users = {
         "admin": {
             "password_hash": _hash_password("admin123"),
             "password_plain": "admin123",
             "role": "admin",
         },
-        "dfsr1": {
-            "password_hash": _hash_password("dfsruser1"),
-            "password_plain": "dfsruser1",
+        "adminquanzhi": {
+            "password_hash": _hash_password("AdminQZ2026!"),
+            "password_plain": "AdminQZ2026!",
+            "role": "admin",
+        },
+        "user01": {
+            "password_hash": _hash_password("User012026!"),
+            "password_plain": "User012026!",
             "role": "user",
         }
     }

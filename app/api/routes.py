@@ -348,6 +348,26 @@ def require_admin(request: Request) -> str:
     raise HTTPException(status_code=401, detail="未认证，请重新登录")
 
 
+DIGITAL_TEACHER_AGENT_ID = "digital-zheng-teacher-agent"
+FULL_KB_ADMIN_USERNAME = "adminquanzhi"
+LIMITED_KB_ADMIN_USERNAME = "admin"
+
+
+def ensure_kb_upload_permission(username: str, agent_id: str) -> None:
+    """校验知识库上传权限。数字郑老师知识库仅全权限账号可上传。"""
+    if agent_id == DIGITAL_TEACHER_AGENT_ID and username != FULL_KB_ADMIN_USERNAME:
+        raise HTTPException(status_code=403, detail="当前账号无权向数字郑老师知识库上传文档")
+
+
+def ensure_kb_delete_permission(username: str, agent_id: str) -> None:
+    """校验知识库删除权限，后端强制执行，不能通过直接调用 API 绕过。"""
+    if username == FULL_KB_ADMIN_USERNAME:
+        return
+    if username == LIMITED_KB_ADMIN_USERNAME and agent_id != DIGITAL_TEACHER_AGENT_ID:
+        return
+    raise HTTPException(status_code=403, detail="当前账号无权删除该知识库的文档")
+
+
 # ===== 请求/响应模型 =====
 
 class ChatRequest(BaseModel):
@@ -1145,6 +1165,8 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
             detail="请先选择一个智能体再上传文档到知识库。普通聊天模式不支持知识库功能。",
 
         )
+
+    ensure_kb_upload_permission(username, agent_id)
 
 
 
@@ -2033,7 +2055,7 @@ async def download_export_document(filename: str):
 
 @router.delete("/documents/{filename}", summary="从知识库删除文档")
 
-async def delete_document_api(filename: str, agent_id: str = Query(None, description="智能体ID，为空时删全局知识库文档"), admin: str = Depends(require_admin)):
+async def delete_document_api(filename: str, agent_id: str = Query(None, description="智能体ID，为空时删全局知识库文档"), username: str = Depends(require_auth)):
 
     """
 
@@ -2052,6 +2074,8 @@ async def delete_document_api(filename: str, agent_id: str = Query(None, descrip
     if not agent_id:
 
         raise HTTPException(status_code=400, detail="普通聊天模式没有知识库，不支持删除文档。请先选择一个智能体。")
+
+    ensure_kb_delete_permission(username, agent_id)
 
     result = delete_document(filename, agent_id=agent_id)
 
@@ -2946,7 +2970,7 @@ async def get_agents(authorization: str = Header(None)):
 
 @router.delete("/agents/{agent_id}/knowledge", summary="删除智能体的知识库")
 
-async def delete_agent_knowledge(agent_id: str, admin: str = Depends(require_admin)):
+async def delete_agent_knowledge(agent_id: str, username: str = Depends(require_auth)):
 
     """
 
@@ -2959,6 +2983,8 @@ async def delete_agent_knowledge(agent_id: str, admin: str = Depends(require_adm
     if not agent_id:
 
         raise HTTPException(status_code=400, detail="agent_id 不能为空")
+
+    ensure_kb_delete_permission(username, agent_id)
 
     result = delete_agent_collection(agent_id)
 

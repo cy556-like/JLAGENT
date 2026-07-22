@@ -26,6 +26,19 @@ let deepThinkEnabled = false;
 let currentMode = 'agent';
 let selectedSkill = null;  // 当前选中的技能（如 '8d-skill'）
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
+const DIGITAL_TEACHER_AGENT_ID = 'digital-zheng-teacher-agent';
+const FULL_KB_ADMIN_USERNAME = 'adminquanzhi';
+
+function canUploadKnowledgeBase(agentId = currentAgentId) {
+    return Boolean(currentUser && agentId && (currentUser === FULL_KB_ADMIN_USERNAME || agentId !== DIGITAL_TEACHER_AGENT_ID));
+}
+
+function canDeleteKnowledgeBase(agentId = currentAgentId) {
+    return Boolean(currentUser && agentId && (
+        currentUser === FULL_KB_ADMIN_USERNAME ||
+        (currentUser === 'admin' && agentId !== DIGITAL_TEACHER_AGENT_ID)
+    ));
+}
 
 // [#12] 同步防抖锁：避免短时间内重复调用 syncAgentsFromServer
 let _syncAgentsLock = false;
@@ -886,10 +899,28 @@ function updateHeaderKbVisibility() {
     }
 }
 
+function updateKnowledgePermissionUi() {
+    const uploadAllowed = canUploadKnowledgeBase();
+    const deleteAllowed = canDeleteKnowledgeBase();
+    ['uploadZone', 'kbPageUploadZone'].forEach(id => {
+        const zone = document.getElementById(id);
+        if (zone) zone.style.display = uploadAllowed ? '' : 'none';
+    });
+    ['kbFileInput', 'kbPageFileInput'].forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.disabled = !uploadAllowed;
+    });
+    const desc = document.getElementById('kbPageDesc');
+    if (desc && currentAgentId) {
+        if (!uploadAllowed) desc.textContent = '当前账号仅可查看该知识库，不能上传或删除文档';
+        else if (!deleteAllowed) desc.textContent = '当前账号可上传和查看文档，但不能删除文档';
+    }
+}
+
 function updateKbUploadVisibility() {
     const kbBtn = document.getElementById('kbUploadToggle');
-    // 只在 agent 模式 且 选中了某个智能体 时才显示知识库上传按钮
-    if (currentMode === 'agent' && currentAgentId) {
+    // 只在当前账号对所选知识库有上传权限时显示
+    if (currentMode === 'agent' && canUploadKnowledgeBase()) {
         kbBtn.style.display = '';
     } else {
         kbBtn.style.display = 'none';
@@ -905,6 +936,10 @@ function updateKbUploadVisibility() {
 function toggleAgentKbUpload() {
     if (!currentAgentId) {
         showToast('请先选择或创建一个智能体');
+        return;
+    }
+    if (!canUploadKnowledgeBase()) {
+        showToast('当前账号无权向数字郑老师知识库上传文档');
         return;
     }
     agentKbUploadMode = !agentKbUploadMode;
@@ -2711,6 +2746,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // ===== Knowledge Base Modal =====
 async function showDocs() {
+    updateKnowledgePermissionUi();
     document.getElementById('docsModal').classList.add('show');
     await loadDocList();
 }
@@ -2736,7 +2772,7 @@ async function loadDocList() {
                 else if (doc.endsWith('.txt')) icon = '📝';
                 const safeName = escapeHtml(doc);
                 const safeNameForAttr = doc.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '&quot;');
-                item.innerHTML = `<span class="doc-icon">${icon}</span><span class="doc-name">${safeName}</span><button class="doc-download-btn" onclick="downloadDocument('${safeNameForAttr}')" title="下载" aria-label="下载文档">📥</button><button class="doc-delete-btn" onclick="deleteDocument('${safeNameForAttr}', this)">删除</button>`;
+                item.innerHTML = `<span class="doc-icon">${icon}</span><span class="doc-name">${safeName}</span><button class="doc-download-btn" onclick="downloadDocument('${safeNameForAttr}')" title="下载" aria-label="下载文档">📥</button>${canDeleteKnowledgeBase() ? `<button class="doc-delete-btn" onclick="deleteDocument('${safeNameForAttr}', this)">删除</button>` : ''}`;
                 list.appendChild(item);
             });
         } else { list.innerHTML = '<div class="doc-empty">暂无文档，请上传</div>'; }
@@ -2744,6 +2780,7 @@ async function loadDocList() {
 }
 
 async function onKbFileSelected(event) {
+    if (!canUploadKnowledgeBase()) { showToast('当前账号无权向该知识库上传文档'); event.target.value = ''; return; }
     const files = event.target.files;
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) { await uploadToKnowledgeBase(files[i]); }
@@ -2752,6 +2789,7 @@ async function onKbFileSelected(event) {
 }
 
 async function deleteDocument(filename, btnEl) {
+    if (!canDeleteKnowledgeBase()) { showToast('当前账号无权删除该知识库文档'); return; }
     if (!confirm(`确定要删除文档 "${filename}" 吗？此操作不可恢复！`)) return;
     const docItem = btnEl.closest('.doc-item');
     btnEl.disabled = true; btnEl.textContent = '删除中...';
@@ -2769,6 +2807,7 @@ async function deleteDocument(filename, btnEl) {
 }
 
 async function uploadToKnowledgeBase(file) {
+    if (!canUploadKnowledgeBase()) { showToast('当前账号无权向该知识库上传文档'); return; }
     const progressEl = document.getElementById('uploadProgress');
     const fileNameEl = document.getElementById('progressFileName');
     const barFill = document.getElementById('progressBarFill');
@@ -2985,7 +3024,9 @@ async function loadKbDocs() {
         docs = docs.map(d => typeof d === 'string' ? d : (d.filename || d.name || d.title || String(d)));
         
         if (docs.length === 0) {
-            listEl.innerHTML = '<div class="kb-empty">暂无文档，点击上方按钮上传</div>';
+            listEl.innerHTML = canUploadKnowledgeBase()
+                ? '<div class="kb-empty">暂无文档，点击上方按钮上传</div>'
+                : '<div class="kb-empty">暂无文档；当前账号对此知识库为只读</div>';
             return;
         }
         let html = '<div class="kb-doc-count">共 ' + docs.length + ' 个文档</div>';
@@ -2997,7 +3038,7 @@ async function loadKbDocs() {
                 '<span class="kb-doc-icon">' + icon + '</span>' +
                 '<span class="kb-doc-name" title="' + escapeHtml(docName) + '">' + escapeHtml(docName) + '</span>' +
                 '</div>' +
-                (userRole === 'admin' ? '<button class="kb-doc-delete" onclick="deleteKbDoc(\'' + docName.replace(/'/g, "\\'") + '\')" title="删除文档">🗑️</button>' : '') +
+                (canDeleteKnowledgeBase() ? '<button class="kb-doc-delete" onclick="deleteKbDoc(\'' + docName.replace(/'/g, "\\'") + '\')" title="删除文档">🗑️</button>' : '') +
                 '</div>';
         });
         listEl.innerHTML = html;
@@ -3012,6 +3053,11 @@ async function uploadKbDoc(input) {
     const file = input.files[0];
     if (!currentAgentId) {
         showToast('请先选择一个智能体');
+        input.value = '';
+        return;
+    }
+    if (!canUploadKnowledgeBase()) {
+        showToast('当前账号无权向该知识库上传文档');
         input.value = '';
         return;
     }
@@ -3036,7 +3082,7 @@ async function uploadKbDoc(input) {
 }
 
 async function deleteKbDoc(filename) {
-    if (userRole !== 'admin') { showToast('仅管理员可删除文档'); return; }
+    if (!canDeleteKnowledgeBase()) { showToast('当前账号无权删除该知识库文档'); return; }
     if (!confirm(`确定删除文档「${filename}」？`)) return;
     try {
         const agentParam = currentAgentId ? `?agent_id=${encodeURIComponent(currentAgentId)}` : '';
@@ -3181,6 +3227,7 @@ function showKbPage() {
     const agentName = agent ? agent.name : '智能体';
     document.getElementById('kbPageTitle').textContent = agentName + ' - 知识库管理';
     document.getElementById('kbPageDesc').textContent = '上传和管理' + agentName + '相关文档，系统将自动进行向量化处理';
+    updateKnowledgePermissionUi();
     // [BUG FIX] 推入历史状态，让浏览器←按钮能回到聊天页
     history.pushState({page: 'kb'}, '');
     // Load docs
@@ -3239,7 +3286,9 @@ async function loadKbPageDocs() {
         document.getElementById('kbStatChunkCount').textContent = totalChunks;
         
         if (docs.length === 0) {
-            listEl.innerHTML = '<div class="kb-doc-empty">暂无文档，请点击上方区域上传</div>';
+            listEl.innerHTML = canUploadKnowledgeBase()
+                ? '<div class="kb-doc-empty">暂无文档，请点击上方区域上传</div>'
+                : '<div class="kb-doc-empty">暂无文档；当前账号对此知识库为只读</div>';
             return;
         }
         let html = '';
@@ -3263,7 +3312,7 @@ async function loadKbPageDocs() {
                 '<div class="kb-doc-name" title="' + safeName + '">' + safeName + '</div>' +
                 '<div class="kb-doc-meta">' + ext.toUpperCase() + '</div>' +
                 '</div>' +
-                (userRole === 'admin' ? '<button class="kb-doc-delete-btn" onclick="deleteKbPageDoc(\'' + safeNameForJs + '\', this)" title="删除文档" aria-label="删除">' +
+                (canDeleteKnowledgeBase() ? '<button class="kb-doc-delete-btn" onclick="deleteKbPageDoc(\'' + safeNameForJs + '\', this)" title="删除文档" aria-label="删除">' +
                 '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>' +
                 ' 删除</button>' : '') +
                 '</div>';
@@ -3276,6 +3325,7 @@ async function loadKbPageDocs() {
 }
 
 async function onKbPageFileSelected(event) {
+    if (!canUploadKnowledgeBase()) { showToast('当前账号无权向该知识库上传文档'); event.target.value = ''; return; }
     const files = event.target.files;
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
@@ -3286,6 +3336,7 @@ async function onKbPageFileSelected(event) {
 }
 
 async function uploadToKbPage(file) {
+    if (!canUploadKnowledgeBase()) { showToast('当前账号无权向该知识库上传文档'); return; }
     const progressEl = document.getElementById('kbPageProgress');
     const fileNameEl = document.getElementById('kbProgressFileName');
     const barFill = document.getElementById('kbProgressBarFill');
@@ -3327,7 +3378,7 @@ async function uploadToKbPage(file) {
 }
 
 async function deleteKbPageDoc(filename, btnEl) {
-    if (userRole !== 'admin') { showToast('仅管理员可删除文档'); return; }
+    if (!canDeleteKnowledgeBase()) { showToast('当前账号无权删除该知识库文档'); return; }
     if (!confirm('确定删除文档「' + filename + '」？此操作不可恢复！')) return;
     const docItem = btnEl.closest('.kb-doc-item');
     btnEl.disabled = true;
