@@ -28,19 +28,22 @@ def _user_file(username: str) -> str:
 
 
 # 允许的智能体ID白名单（顺序与前端 ALLOWED_AGENT_IDS 保持一致）
-# 顺序即侧边栏固定显示顺序：DFMEA排第一
+# 顺序即侧边栏固定显示顺序
 ALLOWED_AGENT_IDS = {
-    'dfmea-risk-agent',            # 1. 整车制造过程改进工作助手
-    'part-design-agent',           # 2. 三电系统质量改进工作助手
-    'simulation-optimization-agent', # 3. 整车评审与AUDIT工作助手
-    'ee-design-agent',             # 4. 供应商来料协同工作助手
-    'embedded-software-agent',     # 5. 售后市场质量改进工作助手
-    'test-verification-agent',     # 6. 数据统计分析预警工作助手
-    'equipment-production-agent',  # 7. 防再发与经验库工作助手
+    'digital-zheng-teacher-agent', # 1. 数字郑老师
+    'dfmea-risk-agent',            # 2. 整车制造过程改进工作助手
+    'part-design-agent',           # 3. 三电系统质量改进工作助手
+    'simulation-optimization-agent', # 4. 整车评审与AUDIT工作助手
+    'ee-design-agent',             # 5. 供应商来料协同工作助手
+    'embedded-software-agent',     # 6. 售后市场质量改进工作助手
+    'test-verification-agent',     # 7. 数据统计分析预警工作助手
+    'equipment-production-agent',  # 8. 防再发与经验库工作助手
+    'lean-improvement-agent',      # 9. 精益提升工作助手
 }
 
 # 固定排序顺序列表（与前端 ALLOWED_AGENT_IDS 数组顺序一致）
 AGENT_SORT_ORDER = [
+    'digital-zheng-teacher-agent',
     'dfmea-risk-agent',
     'part-design-agent',
     'simulation-optimization-agent',
@@ -48,6 +51,7 @@ AGENT_SORT_ORDER = [
     'embedded-software-agent',
     'test-verification-agent',
     'equipment-production-agent',
+    'lean-improvement-agent',
 ]
 
 

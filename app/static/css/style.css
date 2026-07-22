@@ -3533,10 +3533,29 @@ html { scroll-behavior: smooth; }
     color: #888;
     opacity: 1;
 }
-.sidebar-agents-list .agent-item {
+.sidebar-agents-list .agent-item {
     padding: 7px 8px;
     margin-bottom: 0;
-}
+}
+
+.sidebar-agents-list .agent-group-divider {
+    margin: 8px 8px 4px;
+    padding: 8px 2px 0;
+    border-top: 1px solid var(--border);
+    color: var(--text-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    user-select: none;
+}
+
+.sidebar.collapsed .agent-group-divider {
+    height: 1px;
+    margin: 8px 6px 4px;
+    padding: 0;
+    overflow: hidden;
+    color: transparent;
+}
 .sidebar-agents-list .agent-item-icon {
     width: 24px;
     height: 24px;

@@ -38,17 +38,20 @@ let _lastSyncedAgentsHash = '';
 // 允许的智能体ID白名单（与后端 storage.py 保持一致）
 // 顺序即侧边栏固定显示顺序，点击等操作不会改变
 const ALLOWED_AGENT_IDS = [
-    'dfmea-risk-agent',            // 1. 整车制造过程改进工作助手
-    'part-design-agent',           // 2. 三电系统质量改进工作助手
-    'simulation-optimization-agent', // 3. 整车评审与AUDIT工作助手
-    'ee-design-agent',             // 4. 供应商来料协同工作助手
-    'embedded-software-agent',     // 5. 售后市场质量改进工作助手
-    'test-verification-agent',     // 6. 数据统计分析预警工作助手
-    'equipment-production-agent',  // 7. 防再发与经验库工作助手
+    'digital-zheng-teacher-agent', // 1. 数字郑老师
+    'dfmea-risk-agent',            // 2. 整车制造过程改进工作助手
+    'part-design-agent',           // 3. 三电系统质量改进工作助手
+    'simulation-optimization-agent', // 4. 整车评审与AUDIT工作助手
+    'ee-design-agent',             // 5. 供应商来料协同工作助手
+    'embedded-software-agent',     // 6. 售后市场质量改进工作助手
+    'test-verification-agent',     // 7. 数据统计分析预警工作助手
+    'equipment-production-agent',  // 8. 防再发与经验库工作助手
+    'lean-improvement-agent',      // 9. 精益提升工作助手
 ];
 
 // 内置助手名称统一由代码控制，避免浏览器旧缓存或服务端旧数据恢复历史名称
 const BUILTIN_AGENT_NAMES = {
+    'digital-zheng-teacher-agent': '数字郑老师',
     'dfmea-risk-agent': '整车制造过程改进工作助手',
     'part-design-agent': '三电系统质量改进工作助手',
     'simulation-optimization-agent': '整车评审与AUDIT工作助手',
@@ -56,6 +59,7 @@ const BUILTIN_AGENT_NAMES = {
     'embedded-software-agent': '售后市场质量改进工作助手',
     'test-verification-agent': '数据统计分析预警工作助手',
     'equipment-production-agent': '防再发与经验库工作助手',
+    'lean-improvement-agent': '精益提升工作助手',
 };
 
 // 按 ALLOWED_AGENT_IDS 定义的顺序排序智能体列表（保证侧边栏顺序永远固定）
@@ -71,6 +75,16 @@ function sortAgentsByFixedOrder(agents) {
 
 // 每个智能体的欢迎页配置（名称、描述、推荐问题）
 const AGENT_WELCOME_CONFIG = {
+    'digital-zheng-teacher-agent': {
+        name: '数字郑老师',
+        desc: '面向质量改进与精益工作的专业辅导、方法答疑、案例复盘和知识传承。',
+        questions: [
+            { label: '能力介绍', question: '郑老师，请介绍一下你能为质量改进和精益工作提供哪些帮助？' },
+            { label: '问题分析辅导', question: '郑老师，请指导我如何系统分析一个现场质量问题。' },
+            { label: '改进方案评审', question: '郑老师，请帮我评审这份改进方案的逻辑和可执行性。' },
+            { label: '案例复盘方法', question: '郑老师，怎样组织一次有效的质量问题复盘？' },
+        ]
+    },
     'dfmea-risk-agent': {
         name: '整车制造过程改进工作助手',
         desc: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。',
@@ -305,6 +319,16 @@ const AGENT_WELCOME_CONFIG = {
             { label: '经验库权限分级管理', question: '如何建立经验库的权限分级机制，确保核心工艺经验和供应商敏感信息仅对授权人员可见？' },
         ]
     },
+    'lean-improvement-agent': {
+        name: '精益提升工作助手',
+        desc: '聚焦价值流、七大浪费、标准作业、现场改善与效率提升，推动精益改善闭环。',
+        questions: [
+            { label: '七大浪费识别', question: '如何系统识别当前生产现场的七大浪费并确定改善优先级？' },
+            { label: '价值流分析', question: '请指导我绘制当前价值流图，并识别交付周期中的主要瓶颈。' },
+            { label: '标准作业优化', question: '如何通过标准作业组合表优化人员动作和工位节拍？' },
+            { label: '改善项目规划', question: '请帮我制定一个包含目标、措施、责任人和验证方式的精益改善计划。' },
+        ]
+    },
     'standards-innovation-agent': {
         name: '新工程师质量教练智能体',
         desc: '部门新人占比超90%，提供手把手流程指引、典型缺陷判别训练与即时答疑，如同随身导师，加速新工程师能力提升。',
@@ -356,13 +380,15 @@ function forceCorrectAgents() {
     existing.forEach(a => { existingMap[a.id] = a; });
 
     const defaults = {
+        'digital-zheng-teacher-agent': { name: '数字郑老师', task: '你是数字郑老师，面向贵阳吉利汽车质量改进与精益工作，负责专业答疑、方法辅导、案例复盘和知识传承。请始终优先检索本助手独立知识库中的资料后回答问题，并明确区分知识库事实与通用建议。', summary: '质量改进与精益专业辅导' },
         'dfmea-risk-agent': { name: '整车制造过程改进工作助手', task: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。', summary: '整车制造过程改进' },
         'part-design-agent': { name: '三电系统质量改进工作助手', task: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。', summary: '三电系统质量改进' },
         'simulation-optimization-agent': { name: '整车评审与AUDIT工作助手', task: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。', summary: '整车评审与AUDIT' },
         'ee-design-agent': { name: '供应商来料协同工作助手', task: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。', summary: '供应商来料协同' },
         'embedded-software-agent': { name: '售后市场质量改进工作助手', task: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。', summary: '售后市场质量改进' },
         'test-verification-agent': { name: '数据统计分析预警工作助手', task: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。', summary: '数据统计分析预警' },
-        'equipment-production-agent': { name: '防再发与经验库工作助手', task: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。', summary: '防再发与经验库' }
+        'equipment-production-agent': { name: '防再发与经验库工作助手', task: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。', summary: '防再发与经验库' },
+        'lean-improvement-agent': { name: '精益提升工作助手', task: '你是贵阳吉利汽车的精益提升工作助手，聚焦价值流分析、七大浪费识别、标准作业、现场5S、产线平衡、快速换模和持续改善。请始终优先检索本助手独立知识库中的精益标准、改善案例和现场资料后回答问题。', summary: '精益改善与效率提升' }
     };
 
     const correctAgents = Object.keys(defaults).map(id => {
@@ -692,6 +718,12 @@ function renderMyAgents() {
     list.innerHTML = '';
 
     myAgents.forEach(agent => {
+        if (agent.id === 'dfmea-risk-agent') {
+            const divider = document.createElement('div');
+            divider.className = 'agent-group-divider';
+            divider.textContent = '工作助手：';
+            list.appendChild(divider);
+        }
         const item = document.createElement('div');
         item.className = `agent-item${agent.id === currentAgentId ? ' active' : ''}`;
         item.setAttribute('data-agent-id', agent.id);
