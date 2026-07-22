@@ -103,7 +103,7 @@ const ZHENG_TEACHER_PROFILE = {
         },
         wechat: {
             label: '个人微信',
-            content: '如对生产内容产生疑问，相关问题可添加个人微信。',
+            content: '如对AI生成内容产生疑问，相关问题可添加个人微信。',
             image: '/static/images/zheng-wei-wechat.jpg',
             imageAlt: '郑伟老师个人微信二维码'
         }
