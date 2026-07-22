@@ -702,7 +702,7 @@ function deleteAgent(agentId) {
         document.getElementById('kbUploadToggle').classList.remove('active');
         document.getElementById('agentKbBar').style.display = 'none';
         modeChatId['agent'] = null;
-        document.getElementById('chatTitle').textContent = '质量改进工程师助手';
+        document.getElementById('chatTitle').textContent = '质量改进/精益 智能体';
         updateKbUploadVisibility();
         updateHeaderKbVisibility();
     }
@@ -1076,9 +1076,9 @@ function switchMode(mode) {
     if (titleEl) {
         if (mode === 'agent' && currentAgentId) {
             const agent = myAgents.find(a => a.id === currentAgentId);
-            titleEl.textContent = agent ? agent.name : '质量改进工程师助手';
+            titleEl.textContent = agent ? agent.name : '质量改进/精益 智能体';
         } else {
-            titleEl.textContent = mode === 'agent' ? '质量改进工程师助手' : 'Chat';
+            titleEl.textContent = mode === 'agent' ? '质量改进/精益 智能体' : 'Chat';
         }
     }
     // Reset agent when switching to chat mode
@@ -1391,11 +1391,8 @@ async function doLogin() {
             localStorage.setItem('userRole', userRole);
             msgEl.className = 'msg-box success'; msgEl.textContent = '登录成功！';
             setTimeout(async () => {
-                document.getElementById('loginModal').classList.remove('show');
-                document.getElementById('chatPage').style.display = 'flex';
-                document.body.classList.add('body-chat-mode');
-                // [BUG FIX] Push history state so browser back button returns to login
-                history.pushState({page: 'chat'}, '');
+                // 初始化完成前保持聊天页隐藏，避免默认标题/欢迎页短暂闪现
+                document.getElementById('chatPage').style.display = 'none';
                 document.getElementById('headerUserName').textContent = username;
                 document.getElementById('headerUserAvatar').textContent = username[0].toUpperCase();
                 // 显示管理员标识
@@ -1412,6 +1409,12 @@ async function doLogin() {
                 if (!currentAgentId && myAgents.length > 0) {
                     await switchToAgent(myAgents[0].id);
                 }
+                // 智能体、标题和欢迎页都准备好后，再一次性显示聊天页
+                document.getElementById('chatPage').style.display = 'flex';
+                document.getElementById('loginModal').classList.remove('show');
+                document.body.classList.add('body-chat-mode');
+                // [BUG FIX] Push history state so browser back button returns to login
+                history.pushState({page: 'chat'}, '');
             }, 500);
         } else { msgEl.className = 'msg-box error'; msgEl.textContent = data.message || '登录失败'; }
     } catch (e) { msgEl.className = 'msg-box error'; msgEl.textContent = '网络错误'; }
@@ -1536,12 +1539,8 @@ async function tryAutoLogin() {
         if (data.valid && data.username) {
             currentUser = data.username;
             authToken = token;
-            // 自动登录成功：隐藏登录页，显示聊天页
-            document.getElementById('loginModal').classList.remove('show');
-            document.getElementById('chatPage').style.display = 'flex';
-            document.body.classList.add('body-chat-mode');
-            // [BUG FIX] Push history state so browser back button returns to login
-            history.pushState({page: 'chat'}, '');
+            // 初始化完成前保持聊天页隐藏，避免默认标题/欢迎页短暂闪现
+            document.getElementById('chatPage').style.display = 'none';
             document.getElementById('headerUserName').textContent = data.username;
             document.getElementById('headerUserAvatar').textContent = data.username[0].toUpperCase();
             loadChatList();
@@ -1554,6 +1553,11 @@ async function tryAutoLogin() {
             if (!currentAgentId && myAgents.length > 0) {
                 await switchToAgent(myAgents[0].id);
             }
+            document.getElementById('chatPage').style.display = 'flex';
+            document.getElementById('loginModal').classList.remove('show');
+            document.body.classList.add('body-chat-mode');
+            // [BUG FIX] Push history state so browser back button returns to login
+            history.pushState({page: 'chat'}, '');
             return true;
         }
     } catch (e) { console.warn('自动登录失败', e); }
@@ -1710,8 +1714,8 @@ function updateWelcomeContent() {
     } else {
         // 默认欢迎页
         welcomeEl.innerHTML = `
-            <h2>质量改进工程师助手</h2>
-            <p>专业模具AI智能体，独立赋能研发与质量管理</p>
+            <h2>质量改进/精益 智能体</h2>
+            <p>面向质量改进与精益工作的专业智能体</p>
             <div class="quick-actions">
                 <span class="quick-action" onclick="fillQuick(this)" data-question="模具设计评审有哪些关键节点？" role="button" tabindex="0">设计评审</span>
                 <span class="quick-action" onclick="fillQuick(this)" data-question="VDA6.4过程审核要点是什么？" role="button" tabindex="0">过程审核</span>
