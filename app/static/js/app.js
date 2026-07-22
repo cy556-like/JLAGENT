@@ -38,17 +38,25 @@ let _lastSyncedAgentsHash = '';
 // 允许的智能体ID白名单（与后端 storage.py 保持一致）
 // 顺序即侧边栏固定显示顺序，点击等操作不会改变
 const ALLOWED_AGENT_IDS = [
-    'dfmea-risk-agent',            // 1. 整车制造过程改进智能体
-    'part-design-agent',           // 2. 三电系统质量改进智能体
-    'simulation-optimization-agent', // 3. 整车评审与AUDIT智能体
-    'material-selection-agent',     // 4. 新车型质量改进智能体
-    'manufacturing-process-agent',  // 5. 全球车出口保障智能体
-    'ee-design-agent',             // 6. 供应商来料协同智能体
-    'embedded-software-agent',     // 7. 售后市场质量改进智能体
-    'test-verification-agent',     // 8. 数据统计分析预警智能体
-    'equipment-production-agent',  // 9. 防再发与经验库智能体
-    'standards-innovation-agent',  // 10. 新工程师质量教练智能体
+    'dfmea-risk-agent',            // 1. 整车制造过程改进工作助手
+    'part-design-agent',           // 2. 三电系统质量改进工作助手
+    'simulation-optimization-agent', // 3. 整车评审与AUDIT工作助手
+    'ee-design-agent',             // 4. 供应商来料协同工作助手
+    'embedded-software-agent',     // 5. 售后市场质量改进工作助手
+    'test-verification-agent',     // 6. 数据统计分析预警工作助手
+    'equipment-production-agent',  // 7. 防再发与经验库工作助手
 ];
+
+// 内置助手名称统一由代码控制，避免浏览器旧缓存或服务端旧数据恢复历史名称
+const BUILTIN_AGENT_NAMES = {
+    'dfmea-risk-agent': '整车制造过程改进工作助手',
+    'part-design-agent': '三电系统质量改进工作助手',
+    'simulation-optimization-agent': '整车评审与AUDIT工作助手',
+    'ee-design-agent': '供应商来料协同工作助手',
+    'embedded-software-agent': '售后市场质量改进工作助手',
+    'test-verification-agent': '数据统计分析预警工作助手',
+    'equipment-production-agent': '防再发与经验库工作助手',
+};
 
 // 按 ALLOWED_AGENT_IDS 定义的顺序排序智能体列表（保证侧边栏顺序永远固定）
 function sortAgentsByFixedOrder(agents) {
@@ -64,7 +72,7 @@ function sortAgentsByFixedOrder(agents) {
 // 每个智能体的欢迎页配置（名称、描述、推荐问题）
 const AGENT_WELCOME_CONFIG = {
     'dfmea-risk-agent': {
-        name: '整车制造过程改进智能体',
+        name: '整车制造过程改进工作助手',
         desc: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。',
         questions: [
             { label: '冲压件超差排查', question: '冲压单件超出公差的常见原因有哪些，按人机料法环如何系统排查？' },
@@ -90,7 +98,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'part-design-agent': {
-        name: '三电系统质量改进智能体',
+        name: '三电系统质量改进工作助手',
         desc: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。',
         questions: [
             { label: '模组来料标准', question: '三电系统进货检验中，电池模组的开路电压和内阻需要满足什么标准才算合格？' },
@@ -116,7 +124,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'simulation-optimization-agent': {
-        name: '整车评审与AUDIT智能体',
+        name: '整车评审与AUDIT工作助手',
         desc: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。',
         questions: [
             { label: 'AUDIT缺陷等级标准', question: '整车AUDIT评审中，缺陷等级如何划分，A类、B类、C类缺陷的定义和扣分标准是什么？' },
@@ -194,7 +202,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'ee-design-agent': {
-        name: '供应商来料协同智能体',
+        name: '供应商来料协同工作助手',
         desc: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。',
         questions: [
             { label: '来料检验标准查询', question: '如何快速查询特定零部件的进货检验标准和最新版规格书？' },
@@ -220,7 +228,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'embedded-software-agent': {
-        name: '售后市场质量改进智能体',
+        name: '售后市场质量改进工作助手',
         desc: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。',
         questions: [
             { label: '高频故障聚类排名', question: '售后维修数据中，如何按故障现象聚类，找出TOP10高频问题的排名及占比？' },
@@ -246,7 +254,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'test-verification-agent': {
-        name: '数据统计分析预警智能体',
+        name: '数据统计分析预警工作助手',
         desc: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。',
         questions: [
             { label: 'FTT日周对比查询', question: '如何快速查询昨日整车下线一次合格率（FTT）及各车间直通率，并与周均值做对比？' },
@@ -272,7 +280,7 @@ const AGENT_WELCOME_CONFIG = {
         ]
     },
     'equipment-production-agent': {
-        name: '防再发与经验库智能体',
+        name: '防再发与经验库工作助手',
         desc: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。',
         questions: [
             { label: '8D报告结构化入库', question: '如何将已关闭的质量问题8D报告，结构化录入经验库并关联到对应工序、缺陷类型和根本原因？' },
@@ -348,16 +356,13 @@ function forceCorrectAgents() {
     existing.forEach(a => { existingMap[a.id] = a; });
 
     const defaults = {
-        'dfmea-risk-agent': { name: '整车制造过程改进智能体', task: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。', summary: '整车制造过程改进' },
-        'part-design-agent': { name: '三电系统质量改进智能体', task: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。', summary: '三电系统质量改进' },
-        'simulation-optimization-agent': { name: '整车评审与AUDIT智能体', task: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。', summary: '整车评审与AUDIT' },
-        'material-selection-agent': { name: '新车型质量改进智能体', task: '针对新车型，从试制到爬产构建全生命周期质量门，快速暴露弱点，确保SOP质量即成熟。', summary: '新车型质量改进' },
-        'manufacturing-process-agent': { name: '全球车出口保障智能体', task: '专为全球车护航，整合目标市场法规、环境适应性及左/右舵特殊要求，前置规避出口质量风险，确保顺利通关与海外口碑。', summary: '全球车出口保障' },
-        'ee-design-agent': { name: '供应商来料协同智能体', task: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。', summary: '供应商来料协同' },
-        'embedded-software-agent': { name: '售后市场质量改进智能体', task: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。', summary: '售后市场质量改进' },
-        'test-verification-agent': { name: '数据统计分析预警智能体', task: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。', summary: '数据统计分析预警' },
-        'equipment-production-agent': { name: '防再发与经验库智能体', task: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。', summary: '防再发与经验库' },
-        'standards-innovation-agent': { name: '新工程师质量教练智能体', task: '部门新人占比超90%，提供手把手流程指引、典型缺陷判别训练与即时答疑，如同随身导师，加速新工程师能力提升。', summary: '新工程师质量教练' }
+        'dfmea-risk-agent': { name: '整车制造过程改进工作助手', task: '关注冲焊涂总四大工艺关键特性，智能诊断尺寸偏差与焊接飞溅等顽疾，驱动过程能力指数提升，夯实大批量制造质量。', summary: '整车制造过程改进' },
+        'part-design-agent': { name: '三电系统质量改进工作助手', task: '围绕电池、电机、电控，关注绝缘耐压、气密性等核心参数，利用特征分析锁定失效真因，守护新能源安全底线。', summary: '三电系统质量改进' },
+        'simulation-optimization-agent': { name: '整车评审与AUDIT工作助手', task: '依照AUDIT标准进行整车静态、动态评审，数字化记录扣分项，智能分级分类，精准拉动责任单位快速整改，提升整车感官与功能品质。', summary: '整车评审与AUDIT' },
+        'ee-design-agent': { name: '供应商来料协同工作助手', task: '和SQE部门协同，针对百家供应商，确保零部件高质量入厂。', summary: '供应商来料协同' },
+        'embedded-software-agent': { name: '售后市场质量改进工作助手', task: '打通市场、三包维修数据，智能聚类高频故障，快速启动优先改进，提升出口及国内用户满意度。', summary: '售后市场质量改进' },
+        'test-verification-agent': { name: '数据统计分析预警工作助手', task: '汇聚产销全链条数据，以AI算法分析并预测质量趋势，异常点分级，让决策靠数据说话。', summary: '数据统计分析预警' },
+        'equipment-production-agent': { name: '防再发与经验库工作助手', task: '将历史质量问题结构化入库，在合适的时机，自动推送“避坑”措施，有效防止同类缺陷复发。', summary: '防再发与经验库' }
     };
 
     const correctAgents = Object.keys(defaults).map(id => {
@@ -365,7 +370,7 @@ function forceCorrectAgents() {
         const ex = existingMap[id];
         return {
             id: id,
-            name: ex ? (ex.name || def.name) : def.name,
+            name: def.name,
             task: ex ? (ex.task || def.task) : def.task,
             summary: ex ? (ex.summary || def.summary) : def.summary,
             mode: 'agent',
@@ -382,7 +387,9 @@ function forceCorrectAgents() {
 function filterAgents(agents) {
     if (!agents || !Array.isArray(agents)) return sortAgentsByFixedOrder(forceCorrectAgents());
     // 保留内置智能体 + 用户动态创建的智能体（agent_ 开头）
-    const filtered = agents.filter(a => ALLOWED_AGENT_IDS.includes(a.id) || (a.id && a.id.startsWith('agent_')));
+    const filtered = agents
+        .filter(a => ALLOWED_AGENT_IDS.includes(a.id) || (a.id && a.id.startsWith('agent_')))
+        .map(a => BUILTIN_AGENT_NAMES[a.id] ? { ...a, name: BUILTIN_AGENT_NAMES[a.id] } : a);
     // 确保内置智能体一定存在
     const hasBuiltIn = ALLOWED_AGENT_IDS.every(id => filtered.some(a => a.id === id));
     if (!hasBuiltIn) return sortAgentsByFixedOrder(forceCorrectAgents());
