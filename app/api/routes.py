@@ -52,7 +52,14 @@ from app.agent.core import chat, chat_stream_generator, chat_stream_generator_mu
 
 
 # [BUG FIX v5] 可复用的 SSE 流式包装器：客户端断开时真正取消 Agent 执行
-async def _sse_stream_wrapper(generator_factory, request: Request, session_id: str, start_time: float, endpoint: str = "/chat/stream"):
+async def _sse_stream_wrapper(
+    generator_factory,
+    request: Request,
+    session_id: str,
+    start_time: float,
+    username: str,
+    endpoint: str = "/chat/stream",
+):
     """将 chat_stream_generator 包装为 Queue+Producer Task 模式
     
     当客户端断开时，cancel producer_task 可真正终止 Agent 执行。
@@ -125,9 +132,7 @@ async def _sse_stream_wrapper(generator_factory, request: Request, session_id: s
     
     # 更新会话时间
     try:
-        parts = session_id.split("_", 1)
-        if len(parts) == 2:
-            update_chat_time(parts[0], session_id)
+        update_chat_time(username, session_id)
     except Exception:
         pass
 
@@ -154,6 +159,7 @@ from app.memory.manager import (
     flush_session,
 
     create_chat, list_chats, delete_chat, rename_chat, update_chat_time,
+    user_owns_chat,
 
 )
 
@@ -351,6 +357,20 @@ def require_admin(request: Request) -> str:
 DIGITAL_TEACHER_AGENT_ID = "digital-zheng-teacher-agent"
 FULL_KB_ADMIN_USERNAME = "adminquanzhi"
 LIMITED_KB_ADMIN_USERNAME = "admin"
+
+
+def ensure_requested_username(current_username: str, requested_username: str | None) -> str:
+    """Reject attempts to act as a different account."""
+    if requested_username and requested_username != current_username:
+        raise HTTPException(status_code=403, detail="无权访问其他账号的数据")
+    return current_username
+
+
+def ensure_chat_ownership(username: str, chat_id: str) -> None:
+    """Require a chat to be present in the authenticated user's chat index."""
+    if not user_owns_chat(username, chat_id):
+        # Use 404 for both missing and foreign chats to avoid disclosing IDs.
+        raise HTTPException(status_code=404, detail="会话不存在")
 
 
 def ensure_kb_upload_permission(username: str, agent_id: str) -> None:
@@ -742,7 +762,7 @@ async def admin_reset_user_password(username: str, req: AdminResetPasswordReques
 
 @router.post("/chat", response_model=ChatResponse, summary="与 Agent 对话（非流式）")
 
-async def chat_api(req: ChatRequest, username: str = Depends(get_current_user)):
+async def chat_api(req: ChatRequest, username: str = Depends(require_auth)):
 
     """
 
@@ -761,6 +781,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(get_current_user)):
     start = time.time()
 
     is_error = False
+    ensure_chat_ownership(username, req.session_id)
 
     try:
 
@@ -773,12 +794,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(get_current_user)):
         # 更新会话时间
 
         try:
-
-            parts = req.session_id.split("_", 1)
-
-            if len(parts) == 2:
-
-                update_chat_time(parts[0], req.session_id)
+            update_chat_time(username, req.session_id)
 
         except Exception:
 
@@ -806,7 +822,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(get_current_user)):
 
 @router.post("/chat/stream", summary="与 Agent 对话（流式 SSE）")
 
-async def chat_stream_api(req: ChatRequest, request: Request, username: str = Depends(get_current_user)):
+async def chat_stream_api(req: ChatRequest, request: Request, username: str = Depends(require_auth)):
 
     """
 
@@ -827,6 +843,7 @@ async def chat_stream_api(req: ChatRequest, request: Request, username: str = De
     """
 
     start = time.time()
+    ensure_chat_ownership(username, req.session_id)
 
     # 记录统计
 
@@ -840,7 +857,14 @@ async def chat_stream_api(req: ChatRequest, request: Request, username: str = De
 
     return StreamingResponse(
 
-        _sse_stream_wrapper(generator_factory, request, req.session_id, start, endpoint="/chat/stream"),
+        _sse_stream_wrapper(
+            generator_factory,
+            request,
+            req.session_id,
+            start,
+            username=username,
+            endpoint="/chat/stream",
+        ),
 
         media_type="text/event-stream",
 
@@ -886,7 +910,7 @@ async def chat_with_file_stream(
 
     store_to_kb: str = Form("true"),
 
-    username: str = Depends(get_current_user),
+    username: str = Depends(require_auth),
 
 ):
 
@@ -905,6 +929,9 @@ async def chat_with_file_stream(
     """
 
     start = time.time()
+    ensure_chat_ownership(username, session_id)
+    if store_to_kb == "true" and agent_id:
+        ensure_kb_upload_permission(username, agent_id)
 
     # 记录统计
 
@@ -976,7 +1003,11 @@ async def chat_with_file_stream(
 
                 lambda: chat_stream_generator_multimodal(multimodal_content, session_id, agent_id=agent_id, agent_task=agent_task, skill=skill or None),
 
-                request, session_id, start, endpoint="/chat-with-file/stream"
+                request,
+                session_id,
+                start,
+                username=username,
+                endpoint="/chat-with-file/stream",
 
             ),
 
@@ -1114,7 +1145,11 @@ async def chat_with_file_stream(
 
             lambda: chat_stream_generator(full_message_local, session_id, web_search=web_search, mode=mode, deep_think=deep_think, agent_id=aid_local, agent_task=atask_local, skill=skill or None),
 
-            request, session_id, start, endpoint="/chat-with-file/stream"
+            request,
+            session_id,
+            start,
+            username=username,
+            endpoint="/chat-with-file/stream",
 
         ),
 
@@ -2099,9 +2134,10 @@ async def delete_document_api(filename: str, agent_id: str = Query(None, descrip
 
 @router.get("/history/{session_id}", summary="获取对话历史")
 
-async def get_history(session_id: str):
+async def get_history(session_id: str, username: str = Depends(require_auth)):
 
     """获取指定会话的对话历史"""
+    ensure_chat_ownership(username, session_id)
 
     messages = get_history_messages(session_id)
 
@@ -2113,9 +2149,10 @@ async def get_history(session_id: str):
 
 @router.delete("/history/{session_id}", summary="清除对话历史")
 
-async def delete_history(session_id: str):
+async def delete_history(session_id: str, username: str = Depends(require_auth)):
 
     """清除指定会话的对话历史，同时清理临时文件和导出文件"""
+    ensure_chat_ownership(username, session_id)
 
     clear_session_history(session_id)
 
@@ -2170,10 +2207,12 @@ async def get_chats(
     page: int = Query(1, ge=1, description="页码"),          # [#23] 分页
 
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+    current_username: str = Depends(require_auth),
 
 ):
 
     """获取用户的会话列表（支持分页，支持按模式过滤）"""
+    username = ensure_requested_username(current_username, username)
 
     chats = list_chats(username, mode=mode, skip_auto_title=True)  # GET请求跳过自动标题更新，避免写副作用
 
@@ -2214,10 +2253,12 @@ async def create_chat_api(
     mode: str = "agent",
 
     agent_id: str = Query(None, description="智能体ID，会话归属到指定智能体"),
+    current_username: str = Depends(require_auth),
 
 ):
 
     """为用户创建一个新的会话（支持指定模式和智能体归属）"""
+    username = ensure_requested_username(current_username, username)
 
     chat_info = create_chat(username, title, mode=mode, agent_id=agent_id)
 
@@ -2231,11 +2272,18 @@ async def create_chat_api(
 
 @router.delete("/chats/{chat_id}", summary="删除会话")
 
-async def delete_chat_api(chat_id: str, username: str):
+async def delete_chat_api(
+    chat_id: str,
+    username: str,
+    current_username: str = Depends(require_auth),
+):
 
     """删除用户的某个会话，同时清理普通模式下的临时文件和导出文件"""
+    username = ensure_requested_username(current_username, username)
+    ensure_chat_ownership(username, chat_id)
 
-    delete_chat(username, chat_id)
+    if not delete_chat(username, chat_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
 
     # 清理普通模式下的临时文件（存放在 data/temp/{session_id}/ 目录）
 
@@ -2275,11 +2323,20 @@ async def delete_chat_api(chat_id: str, username: str):
 
 @router.put("/chats/{chat_id}/rename", summary="重命名会话")
 
-async def rename_chat_api(chat_id: str, req: RenameRequest):
+async def rename_chat_api(
+    chat_id: str,
+    req: RenameRequest,
+    current_username: str = Depends(require_auth),
+):
 
     """重命名用户的某个会话"""
+    username = ensure_requested_username(current_username, req.username)
+    if req.chat_id != chat_id:
+        raise HTTPException(status_code=400, detail="会话ID不一致")
+    ensure_chat_ownership(username, chat_id)
 
-    rename_chat(req.username, req.chat_id, req.new_title)
+    if not rename_chat(username, chat_id, req.new_title):
+        raise HTTPException(status_code=404, detail="会话不存在")
 
     return {"success": True, "message": "会话已重命名"}
 
@@ -2564,7 +2621,12 @@ async def update_config(req: ConfigUpdateRequest, username: str = Depends(requir
 
 @router.get("/export/{session_id}", summary="导出对话")
 
-async def export_chat(session_id: str, format: str = "md", agent_name: str = ""):
+async def export_chat(
+    session_id: str,
+    format: str = "md",
+    agent_name: str = "",
+    username: str = Depends(require_auth),
+):
 
     """
 
@@ -2578,6 +2640,7 @@ async def export_chat(session_id: str, format: str = "md", agent_name: str = "")
       原生元素（Word/PDF 表格、标题、列表、代码块等），避免出现 |---|---|
       这样的纯文本残留。
     """
+    ensure_chat_ownership(username, session_id)
 
     # [BUG FIX] 使用 get_history_messages_from_file 强制从文件读取最新数据
     # 避免多worker进程下内存缓存不一致导致导出内容错误

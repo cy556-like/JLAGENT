@@ -220,6 +220,16 @@ def clear_session_history(session_id: str) -> None:
         history.clear()
         del _session_store[session_id]
 
+    # The session may have been evicted from the in-memory LRU cache. Deleting
+    # its index must still remove the persisted conversation file. This second
+    # check also covers an in-memory fallback history whose clear() cannot
+    # remove the file itself.
+    file_path = os.path.join(
+        settings.DATA_DIR, "conversations", f"{session_id}.json"
+    )
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
 
 def flush_session(session_id: str) -> None:
     """强制将指定会话的待写入数据刷到磁盘（导出前调用，确保数据一致性）"""
@@ -432,10 +442,23 @@ def list_chats(username: str, mode: str = None, skip_auto_title: bool = False) -
     return chats
 
 
+def user_owns_chat(username: str, chat_id: str) -> bool:
+    """Return whether ``chat_id`` belongs to ``username``.
+
+    Ownership is determined from the user's server-side chat index instead of
+    trusting the username prefix embedded in a client-provided session ID.
+    """
+    if not username or not chat_id:
+        return False
+    return any(chat.get("chat_id") == chat_id for chat in _load_user_chats(username))
+
+
 def delete_chat(username: str, chat_id: str) -> bool:
     """删除用户的某个会话"""
     chats = _load_user_chats(username)
-    chats = [c for c in chats if c["chat_id"] != chat_id]
+    if not any(c.get("chat_id") == chat_id for c in chats):
+        return False
+    chats = [c for c in chats if c.get("chat_id") != chat_id]
     _save_user_chats(username, chats)
     # 同时清除对话历史文件
     clear_session_history(chat_id)
@@ -446,13 +469,13 @@ def rename_chat(username: str, chat_id: str, new_title: str) -> bool:
     """重命名用户的某个会话"""
     chats = _load_user_chats(username)
     for chat in chats:
-        if chat["chat_id"] == chat_id:
+        if chat.get("chat_id") == chat_id:
             chat["title"] = new_title
             chat["title_custom"] = True
             chat["updated_at"] = time.time()
-            break
-    _save_user_chats(username, chats)
-    return True
+            _save_user_chats(username, chats)
+            return True
+    return False
 
 
 # [性能修复] 用户聊天列表写入防抖：避免每条消息都触发磁盘读写
