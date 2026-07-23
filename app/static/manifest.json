@@ -1,12 +1,12 @@
 {
-    "name": "ForgeAgent - AI智能体锻造平台",
-    "short_name": "ForgeAgent",
-    "description": "AI智能体锻造引擎，让每个想法都能锻造出专属Agent。基于 LangGraph ReAct 架构的智能体创建与管理平台。",
+    "name": "贵阳吉利汽车 质量改进/精益 智能体",
+    "short_name": "质量改进/精益 智能体",
+    "description": "贵阳吉利汽车质量改进与精益工作智能助手。",
     "start_url": "/",
     "display": "standalone",
     "orientation": "portrait-primary",
     "background_color": "#F8F7F3",
-    "theme_color": "#1A1A2E",
+    "theme_color": "#1051BF",
     "lang": "zh-CN",
     "scope": "/",
     "icons": [
@@ -51,14 +51,6 @@
             "sizes": "512x512",
             "type": "image/png",
             "purpose": "any maskable"
-        }
-    ],
-    "screenshots": [
-        {
-            "src": "/static/icons/icon-512.png",
-            "sizes": "512x512",
-            "type": "image/png",
-            "form_factor": "narrow"
         }
     ],
     "categories": ["business", "productivity"],

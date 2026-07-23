@@ -1,12 +1,12 @@
 /**
  * DocAgent Service Worker
  * PWA 离线缓存与资源管理
- * 版本: 1.0.0
+ * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'docagent-v1.0.0';
-const STATIC_CACHE = 'docagent-static-v1.0.0';
-const DYNAMIC_CACHE = 'docagent-dynamic-v1.0.0';
+const CACHE_NAME = 'jlagent-v1.1.0';
+const STATIC_CACHE = 'jlagent-static-v1.1.0';
+const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
@@ -14,6 +14,9 @@ const PRECACHE_URLS = [
     '/static/css/style.css',
     '/static/js/app.js',
     '/static/manifest.json',
+    '/static/icons/icon-gy.svg',
+    '/static/icons/icon-192.png',
+    '/static/icons/icon-512.png',
 ];
 
 // 不缓存的路径（API请求、流式响应等）
