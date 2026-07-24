@@ -718,6 +718,8 @@ function deleteAgent(agentId) {
 async function switchToAgent(agentId) {
     const agent = myAgents.find(a => a.id === agentId);
     if (!agent) return;
+    const kbPage = document.getElementById('kbPage');
+    const wasKbPageOpen = Boolean(kbPage && kbPage.style.display !== 'none');
 
     // [BUG FIX #2] 切换智能体时中断正在进行的流式响应
     // 防止旧SSE流在后台继续运行导致 isLoading 锁死、新聊天无法发送消息
@@ -756,12 +758,17 @@ async function switchToAgent(agentId) {
     const welcomeEl = document.getElementById('welcomeCenter');
     if (welcomeEl) welcomeEl.style.display = '';
     const chatContent = document.getElementById('chatContent');
-    if (chatContent) chatContent.classList.add('centered');
+    if (chatContent) {
+        chatContent.style.display = 'flex';
+        chatContent.classList.add('centered');
+    }
 
-    // 知识库页面保持侧边栏可见；在此页面切换智能体时同步刷新对应知识库。
-    const kbPage = document.getElementById('kbPage');
-    if (kbPage && kbPage.style.display !== 'none') {
-        await updateKbPageForCurrentAgent();
+    // 从知识库侧边栏切换智能体时，回到所选智能体的聊天欢迎页。
+    if (wasKbPageOpen) {
+        kbPage.style.display = 'none';
+        if (history.state && history.state.page === 'kb') {
+            history.replaceState({page: 'chat'}, '');
+        }
     }
 }
 
@@ -1821,6 +1828,10 @@ function renderZhengTeacherWelcome(welcomeEl) {
                     </div>
                 </div>
             </div>
+            <div class="zheng-profile-greeting" id="zhengProfileGreeting">
+                <h3>我是郑伟老师AI分身</h3>
+                <p>有任何质量改进、精益、生产技术与制造运营提升方面的问题，直接问我吧</p>
+            </div>
         </section>
     `;
 }
@@ -1843,6 +1854,8 @@ function showZhengProfileTab(button, sectionKey) {
         tab.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     content.innerHTML = renderZhengProfileSection(section);
+    const greeting = document.getElementById('zhengProfileGreeting');
+    if (greeting) greeting.hidden = sectionKey === 'wechat';
 }
 
 // 点击快捷问题：填入输入框（不自动发送），用户可编辑后发送
