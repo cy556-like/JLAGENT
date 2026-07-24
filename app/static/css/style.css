@@ -2680,6 +2680,13 @@ html { scroll-behavior: smooth; }
     font-weight: 700;
 }
 
+.help-contact-intro {
+    margin-bottom: 7px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
 .help-contact-phone {
     display: inline-block;
     color: #1051BF;
