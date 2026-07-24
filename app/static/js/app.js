@@ -91,11 +91,15 @@ const ZHENG_TEACHER_PROFILE = {
     name: '郑伟老师',
     badge: 'AI分身',
     tags: ['质量与精益管理专家', '北京全质科技创办人', '浙江大学EMBA'],
-    meta: '整车质量管理20年 · 丰田、长城、吉利、北汽实战经验',
+    meta: '整车质量与精益管理20余年，丰田、长城、吉利、北汽实战经验',
     sections: {
         expertise: {
             label: '如何训练AI分身',
-            content: '训练AI分身，是一个将顶尖专家的经验“复制”并“进化”为可持续工作的数字智能体的过程。把郑老师数以十万字的问答、讲课等实战经验和资料，转为结构化的数据，并通过通用大模型进行训练和微调，形成一个“数据驱动、持续进化”的数字智能体。'
+            content: '训练AI分身，是将专家的经验“复制”并“进化”为可持续工作的数字智能体的过程。把郑伟老师数以十万字的问答、讲课等实战经验和资料，转为结构化的数据，放到知识库里面，并通过通用大模型进行训练和微调，就形成了一个“数据驱动、持续进化”的数字智能体。'
+        },
+        qa: {
+            label: '问答的优点',
+            content: '问答这种学习方式几乎与人类文明的历史一样长。从《论语》中的一问一答，再到今天我们在质量和精益提升方面的交流，问答一直都是一种比较高效的学习方式。以需求驱动学习，尽可能达成即学即用的目标。'
         },
         profile: {
             label: '个人简介',
@@ -103,7 +107,7 @@ const ZHENG_TEACHER_PROFILE = {
         },
         wechat: {
             label: '个人微信',
-            content: '如对AI生成内容产生疑问，相关问题可添加个人微信。',
+            content: '如需要联系郑伟老师，请加微信：',
             image: '/static/images/zheng-wei-wechat.jpg',
             imageAlt: '郑伟老师个人微信二维码'
         }
@@ -753,6 +757,12 @@ async function switchToAgent(agentId) {
     if (welcomeEl) welcomeEl.style.display = '';
     const chatContent = document.getElementById('chatContent');
     if (chatContent) chatContent.classList.add('centered');
+
+    // 知识库页面保持侧边栏可见；在此页面切换智能体时同步刷新对应知识库。
+    const kbPage = document.getElementById('kbPage');
+    if (kbPage && kbPage.style.display !== 'none') {
+        await updateKbPageForCurrentAgent();
+    }
 }
 
 function renderMyAgents() {
@@ -1407,7 +1417,12 @@ document.addEventListener('click', function(e) {
 // Close modals on Escape key — close the topmost active modal only
 document.addEventListener('keydown', function(e) {
     if (e.key !== 'Escape') return;
-    // Priority: rename > docs > login (topmost first)
+    // Priority: help > rename > docs > login (topmost first)
+    const helpPopover = document.getElementById('helpPopover');
+    if (helpPopover && helpPopover.classList.contains('show')) {
+        closeHelpPopover();
+        return;
+    }
     const renameOverlay = document.getElementById('renameOverlay');
     if (renameOverlay && renameOverlay.classList.contains('show')) { cancelRename(); return; }
     const docsModal = document.getElementById('docsModal');
@@ -1805,10 +1820,6 @@ function renderZhengTeacherWelcome(welcomeEl) {
                         ${renderZhengProfileSection(defaultSection)}
                     </div>
                 </div>
-            </div>
-            <div class="zheng-profile-greeting">
-                <h3>我是郑伟老师AI分身</h3>
-                <p>有任何质量改进、精益、生产技术与制造运营提升方面的问题，直接问我吧</p>
             </div>
         </section>
     `;
@@ -3015,6 +3026,29 @@ function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(e
 // ===== Chat Search =====
 
 // ===== Export Chat =====
+function toggleHelpPopover(event) {
+    event.stopPropagation();
+    const popover = document.getElementById('helpPopover');
+    const button = document.getElementById('headerHelpBtn');
+    if (!popover || !button) return;
+
+    const willOpen = !popover.classList.contains('show');
+    popover.classList.toggle('show', willOpen);
+    button.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+    if (willOpen) {
+        setTimeout(() => {
+            document.addEventListener('click', closeHelpPopover, { once: true });
+        }, 0);
+    }
+}
+
+function closeHelpPopover() {
+    const popover = document.getElementById('helpPopover');
+    const button = document.getElementById('headerHelpBtn');
+    if (popover) popover.classList.remove('show');
+    if (button) button.setAttribute('aria-expanded', 'false');
+}
+
 function toggleExportDropdown() {
     const dropdown = document.getElementById('exportDropdown');
     dropdown.classList.toggle('show');
@@ -3359,7 +3393,16 @@ document.addEventListener('DOMContentLoaded', async function() {
 });
 
 // ===== Knowledge Base Full Page =====
-function showKbPage() {
+function updateKbPageForCurrentAgent() {
+    const agent = myAgents.find(a => a.id === currentAgentId);
+    const agentName = agent ? agent.name : '智能体';
+    document.getElementById('kbPageTitle').textContent = agentName + ' - 知识库';
+    document.getElementById('kbPageDesc').textContent = '上传和管理' + agentName + '相关文档，系统将自动进行向量化处理';
+    updateKnowledgePermissionUi();
+    return loadKbPageDocs();
+}
+
+async function showKbPage() {
     if (!currentAgentId) {
         showToast('请先选择一个智能体');
         return;
@@ -3370,21 +3413,15 @@ function showKbPage() {
     const sidebarOverlay = document.getElementById('sidebarOverlay');
     chatContent.style.display = 'none';
     kbPage.style.display = 'flex';
-    // 隐藏侧边栏
-    if (sidebar) sidebar.style.display = 'none';
+    // 知识库页面保留智能体侧边栏，方便直接切换不同智能体的知识库。
+    if (sidebar) sidebar.style.display = '';
     if (sidebarOverlay) sidebarOverlay.style.display = 'none';
-    // Update title
-    const agent = myAgents.find(a => a.id === currentAgentId);
-    const agentName = agent ? agent.name : '智能体';
-    document.getElementById('kbPageTitle').textContent = agentName + ' - 知识库管理';
-    document.getElementById('kbPageDesc').textContent = '上传和管理' + agentName + '相关文档，系统将自动进行向量化处理';
-    updateKnowledgePermissionUi();
+    const docsLoadPromise = updateKbPageForCurrentAgent();
     // [BUG FIX] 推入历史状态，让浏览器←按钮能回到聊天页
     history.pushState({page: 'kb'}, '');
-    // Load docs
-    loadKbPageDocs();
     // Setup drag and drop
     setupKbPageDragDrop();
+    await docsLoadPromise;
 }
 
 function hideKbPage() {
@@ -3393,7 +3430,7 @@ function hideKbPage() {
     const sidebar = document.getElementById('sidebar');
     kbPage.style.display = 'none';
     chatContent.style.display = 'flex';
-    // 恢复侧边栏
+    // 侧边栏在知识库页面始终保留，这里仅恢复其默认布局状态。
     if (sidebar) sidebar.style.display = '';
     updateCenteredMode();
     // [BUG FIX] 使用 history.back() 弹出 kb 条目，而不是 replaceState 堆积 chat 条目

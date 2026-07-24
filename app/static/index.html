@@ -61,7 +61,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;600;700&display=swap" rel="stylesheet">
 
 
-    <link rel="stylesheet" href="/static/css/style.css?v=20260722i">
+    <link rel="stylesheet" href="/static/css/style.css?v=20260724a">
 
 
 </head>
@@ -270,6 +270,19 @@
             <div class="header-actions">
 
 
+                <div class="help-wrapper">
+                    <button class="header-btn help-btn" id="headerHelpBtn" type="button"
+                            onclick="toggleHelpPopover(event)" title="帮助与客服联系"
+                            aria-label="帮助与客服联系" aria-haspopup="true" aria-expanded="false"><span aria-hidden="true">❓</span><span class="help-label">帮助</span></button>
+                    <div class="help-popover" id="helpPopover" role="dialog" aria-label="联系客服">
+                        <div class="help-popover-title">联系客服</div>
+                        <a class="help-contact-phone" href="tel:18601256219">18601256219</a>
+                        <div class="help-contact-note">微信同号</div>
+                        <div class="help-contact-hours">服务时间：每周7天 8:00-20:00</div>
+                    </div>
+                </div>
+
+
                 <select class="model-select" id="modelSelect" onchange="switchModel()" title="切换模型" aria-label="选择模型"><option value="auto">Auto</option></select>
 
 
@@ -315,7 +328,7 @@
                 <div class="kb-page-title-area">
 
 
-                    <h2 id="kbPageTitle">知识库管理</h2>
+                    <h2 id="kbPageTitle">知识库</h2>
 
 
                     <p id="kbPageDesc" class="kb-page-desc">上传和管理智能体相关文档，系统将自动进行向量化处理</p>
@@ -642,7 +655,7 @@ function toggleFaq(el) {
 </script>
 
 
-<script src="/static/js/app.js?v=20260722j"></script>
+<script src="/static/js/app.js?v=20260724a"></script>
 
 
 </body>
