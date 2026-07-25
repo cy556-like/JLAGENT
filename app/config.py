@@ -33,6 +33,8 @@ AVAILABLE_MODELS = [
     {"id": "qwen3.7-plus", "name": "Qwen3.7-Plus", "desc": "千问旗舰，阿里云DashScope"},
     # MiMo系列（小米）
     {"id": "mimo-v2.5-pro", "name": "MiMo-V2.5-Pro", "desc": "小米旗舰，MiMo推理模型"},
+    # Kimi 系列（Moonshot AI）
+    {"id": "kimi-k3", "name": "Kimi K3", "desc": "Kimi旗舰推理模型，Moonshot API"},
 ]
 
 # 支持图片分析的视觉模型列表
@@ -58,6 +60,9 @@ QWEN_MODELS = {"qwen3.7-plus"}
 
 # MiMo模型列表（走小米MiMo API）
 MIMO_MODELS = {"mimo-v2.5-pro"}
+
+# Kimi模型列表（走 Moonshot API）
+KIMI_MODELS = {"kimi-k3"}
 
 # GLM模型列表（GLM-5.2 已加入 VOLCENGINE_MODELS，走火山引擎Ark；此处仅保留旧版兼容）
 GLM_MODELS = set()
@@ -92,6 +97,10 @@ class Settings:
     # MiMo独立配置（小米）
     MIMO_API_KEY: str = os.getenv("MIMO_API_KEY", "")
     MIMO_BASE_URL: str = os.getenv("MIMO_BASE_URL", "https://api.xiaomimimo.com/v1")
+
+    # Kimi独立配置（Moonshot AI）
+    MOONSHOT_API_KEY: str = os.getenv("MOONSHOT_API_KEY", "")
+    MOONSHOT_BASE_URL: str = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")
 
     # GLM独立配置（阿里云百炼平台，走 LLM_API_KEY/LLM_BASE_URL）
     GLM_API_KEY: str = os.getenv("GLM_API_KEY", os.getenv("LLM_API_KEY", ""))

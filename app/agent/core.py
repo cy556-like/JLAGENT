@@ -29,7 +29,7 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.config import settings, VISION_MODELS, DEFAULT_VISION_MODEL, VISION_API_KEY, VISION_BASE_URL, FAST_MODELS, DEEPSEEK_MODELS, VOLCENGINE_MODELS, QWEN_MODELS, MIMO_MODELS, GLM_MODELS, AUTO_MODEL_ID, resolve_model_id
+from app.config import settings, VISION_MODELS, DEFAULT_VISION_MODEL, VISION_API_KEY, VISION_BASE_URL, FAST_MODELS, DEEPSEEK_MODELS, VOLCENGINE_MODELS, QWEN_MODELS, MIMO_MODELS, KIMI_MODELS, GLM_MODELS, AUTO_MODEL_ID, resolve_model_id
 from app.agent.tools import ALL_TOOLS, get_tools, set_current_agent_id, set_current_session_id, get_current_session_id, reset_search_count
 from app.agent.prompts import SYSTEM_PROMPT, SYSTEM_PROMPT_WITH_WEB_SEARCH, CHAT_SYSTEM_PROMPT, get_agent_keywords_section
 from app.memory.manager import get_session_history
@@ -469,6 +469,8 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     is_qwen = model in QWEN_MODELS
     # [MiMo] 检测是否为MiMo模型，使用小米API
     is_mimo = model in MIMO_MODELS
+    # [Kimi] 检测是否为Kimi模型，使用 Moonshot API
+    is_kimi = model in KIMI_MODELS
     # [GLM] 检测是否为GLM模型，使用阿里云百炼平台（兼容模式代理智谱模型）
     is_glm = model in GLM_MODELS
     
@@ -484,6 +486,12 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         api_key = settings.MIMO_API_KEY
         base_url = settings.MIMO_BASE_URL
         logger.info(f"MiMo模型检测到（{model}），使用小米MiMo API: {base_url}")
+    elif is_kimi:
+        if not settings.MOONSHOT_API_KEY:
+            raise RuntimeError("Kimi K3 未配置 MOONSHOT_API_KEY，请在服务器 .env 中配置后重启服务")
+        api_key = settings.MOONSHOT_API_KEY
+        base_url = settings.MOONSHOT_BASE_URL
+        logger.info(f"Kimi模型检测到（{model}），使用 Moonshot API: {base_url}")
     elif is_glm and settings.GLM_API_KEY:
         api_key = settings.GLM_API_KEY
         base_url = settings.GLM_BASE_URL
@@ -496,7 +504,9 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     else:
         api_key = settings.LLM_API_KEY_BACKUP if use_backup else settings.LLM_API_KEY
         base_url = settings.LLM_BASE_URL_BACKUP if use_backup else settings.LLM_BASE_URL
-    temperature = 0.7 if deep_think else 0.6
+    # Kimi K3 始终开启思考模式，官方要求 temperature=1.0；其余模型保持原策略
+    temperature = 1.0 if is_kimi else (0.7 if deep_think else 0.6)
+    reasoning_effort = ("max" if deep_think else "low") if is_kimi else None
     
     # 智能 max_tokens：保证模型有足够输出空间，避免回答被截断
     if short_response:
@@ -518,7 +528,8 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         request_timeout = 120
 
     # [优化1] 检查缓存，复用已有的 ChatOpenAI 实例（带 TTL 检查）
-    cache_key = (model, api_key, base_url, temperature)
+    # 将输出上限、超时和推理强度纳入缓存键，避免不同模式错误复用客户端
+    cache_key = (model, api_key, base_url, temperature, max_tokens, request_timeout, reasoning_effort)
     if cache_key in _llm_cache:
         entry = _llm_cache[cache_key]
         if time.time() - entry["created_at"] < _LLM_CACHE_TTL:
@@ -535,17 +546,22 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         logger.info(f"使用主API Key: {base_url}")
 
     # [429 自动重试] 添加 2s 初始超时用于连接检测，配合 openai 库内置重试
-    llm = ChatOpenAI(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
-        temperature=temperature,
-        streaming=True,
-        max_tokens=max_tokens,
-        request_timeout=request_timeout,
-        # [重要] 不设置 max_retries，避免超时时指数退避重试放大响应时间
-        # 复杂任务（DFMEA等）LLM生成需要60-120s，重试会导致200-300s的卡死
-    )
+    llm_kwargs = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "model": model,
+        "temperature": temperature,
+        "streaming": True,
+        "max_tokens": max_tokens,
+        "request_timeout": request_timeout,
+    }
+    if is_kimi:
+        # 通过 model_kwargs 作为顶层请求参数透传给 Moonshot OpenAI 兼容接口
+        llm_kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+
+    # [重要] 不设置 max_retries，避免超时时指数退避重试放大响应时间
+    # 复杂任务（DFMEA等）LLM生成需要60-120s，重试会导致200-300s的卡死
+    llm = ChatOpenAI(**llm_kwargs)
     _llm_cache[cache_key] = {"instance": llm, "created_at": time.time()}
     logger.info(f"LLM Client 已创建并缓存: model={model}, max_tokens={max_tokens}, timeout={request_timeout}s, 缓存数量={len(_llm_cache)}")
     return llm
