@@ -506,23 +506,39 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     else:
         api_key = settings.LLM_API_KEY_BACKUP if use_backup else settings.LLM_API_KEY
         base_url = settings.LLM_BASE_URL_BACKUP if use_backup else settings.LLM_BASE_URL
-    # Kimi K3 始终开启思考模式，官方要求 temperature=1.0；其余模型保持原策略
-    temperature = 1.0 if is_kimi else (0.7 if deep_think else 0.6)
+    # [BUG FIX v10] Kimi K3 temperature 处理：
+    # - 不显式传 temperature（让 Moonshot 服务端根据 reasoning_effort 自动选择）
+    # - 参考：hermes-agent #13157 "omit temperature entirely for Kimi/Moonshot models"
+    # - 旧代码传 temperature=1.0 会与服务端 reasoning 模式冲突，
+    #   导致流式响应被服务端中断（incomplete chunked read）
+    if is_kimi:
+        temperature = None  # 不传，由 Moonshot 服务端自动选择
+    else:
+        temperature = 0.7 if deep_think else 0.6
     # [BUG FIX v9] Kimi K3 reasoning_effort 智能分级：
     # - skill_mode=True（8D/FMEA 长输出场景）：统一用 low，避免 reasoning token 过多
     #   导致 Moonshot 服务端在流式响应中途断开连接（incomplete chunked read）
     # - skill_mode=False：保持原策略（deep_think=max，否则=low）
+    # [BUG FIX v10] Kimi K3 reasoning_effort 默认统一用 low：
+    # - 实测 max 模式推理 token 过多，8D skill 长输出场景会被服务端中断
+    # - low 模式推理足够（Kimi K3 low 仍优于多数模型 max）
+    # - 仅当用户明确选 deep_think 时才用 max（用户已知等待时间长）
     if is_kimi:
-        if skill_mode:
-            reasoning_effort = "low"
+        if deep_think and not skill_mode:
+            reasoning_effort = "max"
         else:
-            reasoning_effort = "max" if deep_think else "low"
+            reasoning_effort = "low"
     else:
         reasoning_effort = None
     
     # 智能 max_tokens：保证模型有足够输出空间，避免回答被截断
+    # [BUG FIX v10] Kimi K3 skill_mode 时降到 8192：
+    # - 8D/FMEA 报告实际 5000-7000 token 足够
+    # - 16384 太大导致响应时间过长，触发 Moonshot 服务端流式中断
     if short_response:
         max_tokens = 4096   # 短回复场景（闲聊等），4096 足够且不会过度截断
+    elif skill_mode and is_kimi:
+        max_tokens = 8192   # Kimi K3 skill 场景，避免输出过长被中断
     elif deep_think:
         max_tokens = 16384  # 深度思考需要充足输出空间
     else:
@@ -561,19 +577,24 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     else:
         logger.info(f"使用主API Key: {base_url}")
 
-    # [429 自动重试] 添加 2s 初始超时用于连接检测，配合 openai 库内置重试
+    # [BUG FIX v10] LLM kwargs 构建优化：
+    # - temperature=None 时不传该字段（避免 langchain 警告 + Moonshot 服务端冲突）
+    # - reasoning_effort 用顶层字段（langchain_openai 1.4+ 原生支持，无需 model_kwargs）
+    # - 移除 model_kwargs 透传（消除 UserWarning）
     llm_kwargs = {
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
-        "temperature": temperature,
         "streaming": True,
         "max_tokens": max_tokens,
         "request_timeout": request_timeout,
     }
-    if is_kimi:
-        # 通过 model_kwargs 作为顶层请求参数透传给 Moonshot OpenAI 兼容接口
-        llm_kwargs["model_kwargs"] = {"reasoning_effort": reasoning_effort}
+    # temperature 仅在非 None 时传（Kimi K3 不传，让服务端自动选择）
+    if temperature is not None:
+        llm_kwargs["temperature"] = temperature
+    # reasoning_effort 用顶层字段（langchain_openai 1.4+ 已原生支持）
+    if reasoning_effort is not None:
+        llm_kwargs["reasoning_effort"] = reasoning_effort
 
     # [重要] 不设置 max_retries，避免超时时指数退避重试放大响应时间
     # 复杂任务（DFMEA等）LLM生成需要60-120s，重试会导致200-300s的卡死
@@ -985,8 +1006,9 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
         # [质量修复] 日期已通过 _inject_current_date() 注入 system_prompt 尾部，不再插入假 HumanMessage
         system_msg = SystemMessage(content=custom_system_prompt)
         
-        # [BUG FIX v9] 流式响应中断重试：捕获 RemoteProtocolError / ReadError / TimeoutError
-        max_retries = 2
+        # [BUG FIX v10] 流式响应中断重试：3 次重试 + 指数退避（1s/2s/4s）
+        # 捕获 RemoteProtocolError / ReadError / TimeoutError / ConnectionError
+        max_retries = 3
         last_exc = None
         for attempt in range(1, max_retries + 1):
             if _is_session_cancelled():
@@ -1027,8 +1049,10 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
                 except Exception as rebuild_e:
                     logger.error(f"think() 重建 LLM 实例失败: {rebuild_e}", exc_info=True)
                     raise last_exc
-                # 短暂退避
-                await asyncio.sleep(1.0)
+                # [BUG FIX v10] 指数退避：1s, 2s, 4s（避免短时间内重复触发限流）
+                backoff = 2 ** (attempt - 1)  # attempt=1 → 1s, attempt=2 → 2s, attempt=3 → 4s
+                logger.info(f"think() 第 {attempt}/{max_retries} 次重试，退避 {backoff}s...")
+                await asyncio.sleep(backoff)
         # 理论上不会走到这里
         raise last_exc if last_exc else RuntimeError("think() unexpected exit")
 
@@ -1467,9 +1491,11 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
                     logger.error(f"_chat_mode_stream 重建 LLM 失败: {rebuild_e}", exc_info=True)
                     yield {"type": "error", "content": f"处理失败: {str(e)}"}
                     return
-                # 重试前清空已生成的部分响应，避免拼接错乱
-                full_response = ""
-                await asyncio.sleep(1.0)
+                # [BUG FIX v10] 指数退避 + 清空部分响应
+                backoff = 2 ** (retry_count - 1)  # retry_count=1 → 1s, 2 → 2s
+                full_response = ""  # 重试前清空已生成的部分响应，避免拼接错乱
+                logger.info(f"_chat_mode_stream 第 {retry_count}/{max_retry} 次重试，退避 {backoff}s...")
+                await asyncio.sleep(backoff)
                 continue
             yield {"type": "error", "content": f"处理失败: {str(e)}"}
             return
