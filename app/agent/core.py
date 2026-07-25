@@ -1151,6 +1151,15 @@ def get_agent_with_prompt(
     # [BUG FIX v12] Kimi K3 时清理 tool schema（移除 boolean 类型，Moonshot 不接受）
     tools = _sanitize_tools_for_moonshot(tools, _is_kimi_for_sanitize)
     llm_with_tools = llm.bind_tools(tools)
+    # [BUG FIX v15] Kimi K3 始终开启思考，8D 首轮若使用 auto 可能持续推理而
+    # 不发起工具调用，最终被 Moonshot 中断。官方建议首轮使用 required；
+    # 工具执行后的总结轮仍使用上面的 auto，避免重复调用工具。
+    kimi_8d_required = _is_kimi_for_sanitize and skill == "8d-skill"
+    llm_with_required_tool = (
+        llm.bind_tools(tools, tool_choice="required")
+        if kimi_8d_required
+        else None
+    )
 
     async def think(state: AgentState):
         """LLM 思考：分析用户问题，决定是否调用工具
@@ -1162,7 +1171,7 @@ def get_agent_with_prompt(
         - 两次都失败则抛出原异常，由上层 chat_stream_generator 走非流式 fallback
         """
         # [BUG FIX v9] 声明 nonlocal 必须在使用前，放在函数开头
-        nonlocal llm_with_tools
+        nonlocal llm_with_tools, llm_with_required_tool
         if _is_session_cancelled():
             logger.warning("检测到会话已取消，跳过 LLM 调用（自定义智能体）")
             raise RuntimeError("Session cancelled by user")
@@ -1179,7 +1188,15 @@ def get_agent_with_prompt(
                 logger.warning(f"think() 第 {attempt} 次尝试前检测到会话已取消，跳过")
                 raise RuntimeError("Session cancelled by user")
             try:
-                response = await llm_with_tools.ainvoke([system_msg] + messages)
+                # 首轮最后一条是 HumanMessage，必须调用8D工具；工具完成后的最后
+                # 一条是 ToolMessage，此时恢复 auto，让模型生成最终说明和下载链接。
+                active_llm = (
+                    llm_with_required_tool
+                    if kimi_8d_required
+                    and not isinstance(messages[-1], ToolMessage)
+                    else llm_with_tools
+                )
+                response = await active_llm.ainvoke([system_msg] + messages)
                 return {"messages": [response]}
             except (RuntimeError, asyncio.CancelledError):
                 # 会话取消或上层取消，直接抛出不重试
@@ -1241,6 +1258,11 @@ def get_agent_with_prompt(
                     )
                     # [BUG FIX v12] 重建后也需要 sanitize tools（与首次一致）
                     llm_with_tools = new_llm.bind_tools(tools)
+                    if kimi_8d_required:
+                        llm_with_required_tool = new_llm.bind_tools(
+                            tools,
+                            tool_choice="required",
+                        )
                 except Exception as rebuild_e:
                     logger.error(f"think() 重建 LLM 实例失败: {rebuild_e}", exc_info=True)
                     raise last_exc
