@@ -427,7 +427,7 @@ _llm_cache = {}  # cache_key -> {"instance": ChatOpenAI, "created_at": float}
 _LLM_CACHE_TTL = 900  # 15分钟，短于代理/服务端典型空闲超时（60-120s）
 
 def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override: str = None, 
-               short_response: bool = False):
+               short_response: bool = False, skill_mode: bool = False):
     """创建 LLM 实例（启用 streaming 支持，支持备用Key自动切换）
     
     [优化1] 使用缓存：按 (model, api_key, base_url, temperature) 作为缓存 key，
@@ -439,6 +439,8 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         fast_mode: 是否使用快速模型（用于简单问题的快速响应）
         model_override: 强制指定模型（用于多模态等需要切换模型的场景）
         short_response: 是否为短回复场景（降低 max_tokens 加速推理）
+        skill_mode: 是否为 8D/FMEA skill 模式（复杂长输出场景，需要降级 Kimi K3 的
+                    reasoning_effort 以避免 Moonshot 流式响应被服务端中断）
     """
     global _primary_key_failed
     selected_model = model_override or settings.LLM_MODEL
@@ -506,7 +508,17 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         base_url = settings.LLM_BASE_URL_BACKUP if use_backup else settings.LLM_BASE_URL
     # Kimi K3 始终开启思考模式，官方要求 temperature=1.0；其余模型保持原策略
     temperature = 1.0 if is_kimi else (0.7 if deep_think else 0.6)
-    reasoning_effort = ("max" if deep_think else "low") if is_kimi else None
+    # [BUG FIX v9] Kimi K3 reasoning_effort 智能分级：
+    # - skill_mode=True（8D/FMEA 长输出场景）：统一用 low，避免 reasoning token 过多
+    #   导致 Moonshot 服务端在流式响应中途断开连接（incomplete chunked read）
+    # - skill_mode=False：保持原策略（deep_think=max，否则=low）
+    if is_kimi:
+        if skill_mode:
+            reasoning_effort = "low"
+        else:
+            reasoning_effort = "max" if deep_think else "low"
+    else:
+        reasoning_effort = None
     
     # 智能 max_tokens：保证模型有足够输出空间，避免回答被截断
     if short_response:
@@ -526,10 +538,14 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         request_timeout = 180
     else:
         request_timeout = 120
+    # [BUG FIX v9] skill_mode（8D/FMEA）场景下增大超时：
+    # 长输出 + 工具调用多轮 think，120s 不够，提升到 240s
+    if skill_mode and not short_response:
+        request_timeout = max(request_timeout, 240)
 
     # [优化1] 检查缓存，复用已有的 ChatOpenAI 实例（带 TTL 检查）
     # 将输出上限、超时和推理强度纳入缓存键，避免不同模式错误复用客户端
-    cache_key = (model, api_key, base_url, temperature, max_tokens, request_timeout, reasoning_effort)
+    cache_key = (model, api_key, base_url, temperature, max_tokens, request_timeout, reasoning_effort, skill_mode)
     if cache_key in _llm_cache:
         entry = _llm_cache[cache_key]
         if time.time() - entry["created_at"] < _LLM_CACHE_TTL:
@@ -647,7 +663,7 @@ class ParallelToolNode:
         return {"messages": all_tool_messages}
 
 
-def create_agent_graph(web_search: bool = False):
+def create_agent_graph(web_search: bool = False, skill_mode: bool = False):
     """
     构建 LangGraph Agent 执行图
 
@@ -658,7 +674,7 @@ def create_agent_graph(web_search: bool = False):
            ├─ 是 → 执行工具 → 回到 LLM 思考（循环，最多8轮）
            └─ 否 → 输出回答 → 结束
     """
-    llm = create_llm()
+    llm = create_llm(skill_mode=skill_mode)
     tools = get_tools(web_search=web_search)
     llm_with_tools = llm.bind_tools(tools)
     system_prompt = SYSTEM_PROMPT_WITH_WEB_SEARCH if web_search else SYSTEM_PROMPT
@@ -724,11 +740,11 @@ def create_agent_graph(web_search: bool = False):
 _agent_graph = None
 _agent_web_search = False
 
-def get_agent(web_search: bool = False):
+def get_agent(web_search: bool = False, skill_mode: bool = False):
     """获取 Agent 实例（懒加载，根据 web_search 参数决定是否包含联网搜索工具）"""
     global _agent_graph, _agent_web_search
     if _agent_graph is None or _agent_web_search != web_search:
-        _agent_graph = create_agent_graph(web_search=web_search)
+        _agent_graph = create_agent_graph(web_search=web_search, skill_mode=skill_mode)
         _agent_web_search = web_search
     return _agent_graph
 
@@ -931,7 +947,7 @@ def _build_chat_prompt(agent_task: str, agent_id: str = None) -> str:
 _agent_prompt_graph_cache = {}  # cache_key -> compiled graph
 _AGENT_PROMPT_CACHE_MAX_SIZE = 8  # 最多缓存 8 个不同的自定义 Agent 图
 
-def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False):
+def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, skill_mode: bool = False):
     """获取带有自定义系统提示词的 Agent 实例
     
     [优化2] 按 prompt hash + web_search 缓存编译后的 Agent Graph，
@@ -940,14 +956,14 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False):
     """
     # 生成缓存 key
     prompt_hash = hashlib.md5(custom_system_prompt.encode()).hexdigest()[:16]
-    cache_key = f"{prompt_hash}:{web_search}"
+    cache_key = f"{prompt_hash}:{web_search}:{skill_mode}"
     
     if cache_key in _agent_prompt_graph_cache:
         logger.debug(f"Agent Graph 缓存命中: prompt_hash={prompt_hash}, web_search={web_search}")
         _agent_prompt_graph_timestamps[cache_key] = time.time()  # [性能修复] 更新访问时间
         return _agent_prompt_graph_cache[cache_key]
     
-    llm = create_llm()
+    llm = create_llm(skill_mode=skill_mode)
     tools = get_tools(web_search=web_search)
     llm_with_tools = llm.bind_tools(tools)
 
@@ -955,15 +971,66 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False):
         """LLM 思考：分析用户问题，决定是否调用工具
         
         [BUG FIX v7] 改回 async + ainvoke()，原因同上（长回复流式事件跨线程丢失 → fallback 重复执行）
+        [BUG FIX v9] 针对 Moonshot/Kimi 流式响应中断（RemoteProtocolError: peer closed
+        connection without sending complete message body）添加自动重试：
+        - 第一次失败后，重新创建 LLM 实例（清空可能死掉的 TCP 连接）再试 1 次
+        - 两次都失败则抛出原异常，由上层 chat_stream_generator 走非流式 fallback
         """
+        # [BUG FIX v9] 声明 nonlocal 必须在使用前，放在函数开头
+        nonlocal llm_with_tools
         if _is_session_cancelled():
             logger.warning("检测到会话已取消，跳过 LLM 调用（自定义智能体）")
             raise RuntimeError("Session cancelled by user")
         messages = state["messages"]
         # [质量修复] 日期已通过 _inject_current_date() 注入 system_prompt 尾部，不再插入假 HumanMessage
         system_msg = SystemMessage(content=custom_system_prompt)
-        response = await llm_with_tools.ainvoke([system_msg] + messages)
-        return {"messages": [response]}
+        
+        # [BUG FIX v9] 流式响应中断重试：捕获 RemoteProtocolError / ReadError / TimeoutError
+        max_retries = 2
+        last_exc = None
+        for attempt in range(1, max_retries + 1):
+            if _is_session_cancelled():
+                logger.warning(f"think() 第 {attempt} 次尝试前检测到会话已取消，跳过")
+                raise RuntimeError("Session cancelled by user")
+            try:
+                response = await llm_with_tools.ainvoke([system_msg] + messages)
+                return {"messages": [response]}
+            except (RuntimeError, asyncio.CancelledError):
+                # 会话取消或上层取消，直接抛出不重试
+                raise
+            except Exception as e:
+                err_msg = str(e).lower()
+                # 仅对网络中断类错误重试（不重试 401/400/参数错误等）
+                retryable = any(kw in err_msg for kw in [
+                    "peer closed connection",
+                    "incomplete chunked read",
+                    "remoteprotocolerror",
+                    "readerror",
+                    "connection reset",
+                    "connection aborted",
+                    "connection broken",
+                    "timeout",
+                    "timeoutexception",
+                    "read timeout",
+                    "remotedisconnected",
+                    "chunked encoding",
+                ])
+                last_exc = e
+                if not retryable or attempt >= max_retries:
+                    logger.error(f"think() 第 {attempt}/{max_retries} 次调用失败（不可重试或已用完重试）: {e}", exc_info=True)
+                    raise
+                logger.warning(f"think() 第 {attempt}/{max_retries} 次调用失败（网络中断，将重试）: {e}")
+                # 重建 LLM 实例（清空死掉的 TCP 连接）
+                try:
+                    new_llm = create_llm(skill_mode=skill_mode)
+                    llm_with_tools = new_llm.bind_tools(tools)
+                except Exception as rebuild_e:
+                    logger.error(f"think() 重建 LLM 实例失败: {rebuild_e}", exc_info=True)
+                    raise last_exc
+                # 短暂退避
+                await asyncio.sleep(1.0)
+        # 理论上不会走到这里
+        raise last_exc if last_exc else RuntimeError("think() unexpected exit")
 
     tool_node = ParallelToolNode(tools, messages_key="messages")
 
@@ -1040,7 +1107,7 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
         history.add_message(AIMessage(content=full_response))
         return full_response
 
-    agent = get_agent_with_prompt(custom_prompt, web_search=web_search)
+    agent = get_agent_with_prompt(custom_prompt, web_search=web_search, skill_mode=bool(skill))
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     all_messages = recent_messages + [HumanMessage(content=user_input)]
@@ -1136,9 +1203,9 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         if skill_ctx:
             custom_system_prompt = custom_system_prompt + skill_ctx
     if resolved_agent_task:
-        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search)
+        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search, skill_mode=bool(skill))
     else:
-        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search)
+        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search, skill_mode=bool(skill))
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     all_messages = recent_messages + [HumanMessage(content=user_input)]
@@ -1226,8 +1293,11 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         _cleanup_session_cancel(session_id)
         return
     except Exception as e:
-        # [BUG FIX v6] 异常时也设置取消信号，避免后续 think() 继续浪费调用
-        _set_session_cancelled(session_id)
+        # [BUG FIX v6] 异常时记录日志（不立即设置取消信号）
+        # [BUG FIX v9] 重大修复：原代码在此处直接 _set_session_cancelled 会导致下面的
+        #   agent.ainvoke fallback 触发 think() 的 "检测到会话已取消" 立即 raise，
+        #   fallback 永远失败 → 用户看到 "处理失败: Session cancelled by user" 错误。
+        #   新逻辑：仅在 fallback 也失败或正常退出时才设置取消信号。
         logger.error(f"Agent 流式输出异常: {e}", exc_info=True)
         # [BUG FIX] 异常时：先发送未完成工具的 tool_done
         for tool_name, display_name in pending_tools.items():
@@ -1235,14 +1305,19 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         pending_tools.clear()
         # 检测401认证错误，自动切换备用Key
         if _check_and_switch_to_backup(e):
+            _set_session_cancelled(session_id)  # 401 才真正标记取消
             yield {"type": "error", "content": "主API Key已失效，已自动切换到备用Key，请重新提问"}
             yield {"type": "done"}
             _cleanup_session_cancel(session_id)
             return
+        # [BUG FIX v9] 在执行非流式 fallback 之前，确保 cancel_event 处于未触发状态，
+        # 否则 think() 会因为 _is_session_cancelled() 直接 raise，fallback 必失败。
+        # _get_or_create_cancel_event 会自动 set 旧的事件，并返回一个全新的未触发事件。
+        cancel_event = _get_or_create_cancel_event(session_id)
         try:
             result = await asyncio.wait_for(
                 agent.ainvoke({"messages": all_messages, "retry_count": 0}),
-                timeout=60.0  # [BUG FIX] 非流式回退也加超时
+                timeout=120.0  # [BUG FIX v9] 非流式回退超时从 60s 提升到 120s（skill 长输出场景需要）
             )
             ai_message = result["messages"][-1]
             full_response = ai_message.content or ""
@@ -1251,12 +1326,16 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
                     yield {"type": "token", "content": full_response[i:i+3]}
                     await asyncio.sleep(0.02)
         except asyncio.TimeoutError:
+            _set_session_cancelled(session_id)
             yield {"type": "error", "content": "非流式回退也超时，请稍后重试"}
             yield {"type": "done"}
+            _cleanup_session_cancel(session_id)
             return
         except Exception as e2:
+            _set_session_cancelled(session_id)
             yield {"type": "error", "content": f"处理失败: {str(e2)}"}
             yield {"type": "done"}
+            _cleanup_session_cancel(session_id)
             return
 
     # 流式输出为空时回退到非流式
@@ -1312,7 +1391,13 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
     # [质量修复] 不再因简单问题降级模型（fast_mode 会切换到更弱的模型）
     # 保留 short_response 仅调整 max_tokens，但用户选择的模型不再被替换
     is_simple = _is_simple_query(user_input)
-    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=is_simple)
+    # [BUG FIX v9] skill_mode 透传：8D/FMEA 场景下 Kimi K3 用 low reasoning_effort
+    # 避免流式响应被 Moonshot 服务端中断
+    if skill and not is_simple:
+        # skill 模式禁用 short_response 以保留足够 max_tokens 输出长报告
+        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=True)
+    else:
+        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=is_simple, skill_mode=bool(skill))
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     
@@ -1337,25 +1422,57 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
 
     full_response = ""
 
-    try:
-        yield {"type": "thinking", "content": "深度思考中..." if deep_think else "正在思考..."}
+    # [BUG FIX v9] chat 模式同样需要针对流式中断重试（Kimi K3 + skill 场景）
+    retry_count = 0
+    max_retry = 1
+    while True:
+        try:
+            yield {"type": "thinking", "content": "深度思考中..." if deep_think else "正在思考..."}
 
-        async for chunk in llm.astream([SystemMessage(content=chat_system_prompt)] + all_messages):
-            content = _extract_content(chunk)
-            if content:
-                full_response += content
-                yield {"type": "token", "content": content}
+            async for chunk in llm.astream([SystemMessage(content=chat_system_prompt)] + all_messages):
+                content = _extract_content(chunk)
+                if content:
+                    full_response += content
+                    yield {"type": "token", "content": content}
+            break  # 成功完成，跳出重试循环
 
-    except asyncio.TimeoutError:
-        yield {"type": "error", "content": "请求超时，LLM服务响应过慢，请稍后重试"}
-        return
-    except Exception as e:
-        # 检测401认证错误，自动切换备用Key
-        if _check_and_switch_to_backup(e):
-            yield {"type": "error", "content": "主API Key已失效，已自动切换到备用Key，请重新提问"}
+        except asyncio.TimeoutError:
+            yield {"type": "error", "content": "请求超时，LLM服务响应过慢，请稍后重试"}
             return
-        yield {"type": "error", "content": f"处理失败: {str(e)}"}
-        return
+        except Exception as e:
+            err_msg = str(e).lower()
+            retryable = any(kw in err_msg for kw in [
+                "peer closed connection",
+                "incomplete chunked read",
+                "remoteprotocolerror",
+                "readerror",
+                "connection reset",
+                "connection aborted",
+                "connection broken",
+                "read timeout",
+                "remotedisconnected",
+                "chunked encoding",
+            ])
+            # 检测401认证错误，自动切换备用Key
+            if _check_and_switch_to_backup(e):
+                yield {"type": "error", "content": "主API Key已失效，已自动切换到备用Key，请重新提问"}
+                return
+            if retryable and retry_count < max_retry:
+                retry_count += 1
+                logger.warning(f"_chat_mode_stream 流式响应中断，重建 LLM 实例并重试 (第 {retry_count}/{max_retry} 次): {e}")
+                # 重建 LLM 实例（清空可能死掉的 TCP 连接）
+                try:
+                    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=bool(skill))
+                except Exception as rebuild_e:
+                    logger.error(f"_chat_mode_stream 重建 LLM 失败: {rebuild_e}", exc_info=True)
+                    yield {"type": "error", "content": f"处理失败: {str(e)}"}
+                    return
+                # 重试前清空已生成的部分响应，避免拼接错乱
+                full_response = ""
+                await asyncio.sleep(1.0)
+                continue
+            yield {"type": "error", "content": f"处理失败: {str(e)}"}
+            return
 
     if full_response:
         try:
