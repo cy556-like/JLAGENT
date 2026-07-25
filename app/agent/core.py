@@ -1401,6 +1401,285 @@ def _extract_content(chunk) -> str:
         return ''.join(text_parts)
     return ''
 
+
+def _call_kimi_8d_arguments(full_skill_prompt: str, user_input: str) -> dict:
+    """使用 Kimi K3 官方原生 JSON 模式提取 8D 生成参数。
+
+    K3 与 LangChain 的长上下文 tool_calls 组合在部分服务器网络上会把上游
+    400 响应包装成 Connection error。这里仍完整加载 8D Skill，只绕开
+    LangChain 工具绑定层；报告文件继续由项目本地 generate_8d_report_tool
+    生成。
+    """
+    import json
+    import re
+    from openai import OpenAI
+
+    argument_instruction = """
+
+## Kimi K3 8D 参数提取任务
+你已经获得完整的 8D Skill、匹配模板和参考资料。请结合用户需求，
+只返回供本地 generate_8d_report_tool 使用的 JSON 对象，不要输出 Markdown，
+不要在对话中直接撰写整份报告。
+
+JSON 字段：
+- product、defect、customer：字符串，必须提供
+- defect_rate：字符串，缺省为 500PPM
+- batch_size：字符串，缺省为 12
+- template：只能是 paint-defect、assembly-defect、welding-defect、
+  dimensional-defect、generic-defect 之一
+- five_why_steps、rc_summary、containment_actions、permanent_actions、
+  yokoten_actions：有充分事实时填写 JSON 字符串，否则填空字符串，让匹配模板提供内容
+- auto_fill：布尔值；用户说“随便、示例、范例、帮我填”时为 true
+
+信息不足且用户要求示例时，请使用清楚标注为示例的合理值，不要追问。
+"""
+    completion = None
+    last_error = None
+    for attempt in range(1, 4):
+        client = OpenAI(
+            api_key=settings.MOONSHOT_API_KEY,
+            base_url=settings.MOONSHOT_BASE_URL,
+            timeout=180.0,
+            max_retries=0,
+        )
+        try:
+            completion = client.chat.completions.create(
+                model="kimi-k3",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": full_skill_prompt + argument_instruction,
+                    },
+                    {"role": "user", "content": user_input},
+                ],
+                reasoning_effort="low",
+                max_completion_tokens=4096,
+                response_format={"type": "json_object"},
+                stream=False,
+            )
+            break
+        except Exception as exc:
+            last_error = exc
+            error_text = str(exc).lower()
+            retryable = any(marker in error_text for marker in (
+                "connection",
+                "timeout",
+                "peer closed",
+                "incomplete",
+                "reset",
+                "temporarily unavailable",
+            ))
+            if not retryable or attempt >= 3:
+                raise
+            logger.warning(
+                "Kimi 8D 原生 JSON 调用第 %s/3 次失败，将重建连接重试: %s",
+                attempt,
+                exc,
+            )
+            time.sleep(2 ** (attempt - 1))
+        finally:
+            client.close()
+
+    if completion is None:
+        raise last_error or RuntimeError("Kimi K3 8D 参数调用失败")
+
+    content = completion.choices[0].message.content or ""
+    if not content.strip():
+        raise RuntimeError("Kimi K3 未返回 8D 参数")
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", content)
+        if not match:
+            raise RuntimeError("Kimi K3 返回的 8D 参数不是有效 JSON")
+        data = json.loads(match.group(0))
+
+    if not isinstance(data, dict):
+        raise RuntimeError("Kimi K3 返回的 8D 参数格式错误")
+
+    allowed_templates = {
+        "paint-defect",
+        "assembly-defect",
+        "welding-defect",
+        "dimensional-defect",
+        "generic-defect",
+    }
+    template = str(data.get("template") or "generic-defect")
+    if template not in allowed_templates:
+        template = "generic-defect"
+
+    def _json_string(name: str) -> str:
+        value = data.get(name, "")
+        if isinstance(value, (dict, list)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value or "")
+
+    auto_fill_value = data.get("auto_fill", False)
+    if isinstance(auto_fill_value, str):
+        auto_fill = auto_fill_value.strip().lower() in {"true", "1", "yes", "是"}
+    else:
+        auto_fill = bool(auto_fill_value)
+
+    return {
+        "product": str(data.get("product") or "示例汽车零部件"),
+        "defect": str(data.get("defect") or "示例质量缺陷"),
+        "customer": str(data.get("customer") or "示例客户"),
+        "defect_rate": str(data.get("defect_rate") or "500PPM"),
+        "batch_size": str(data.get("batch_size") or "12"),
+        "template": template,
+        "five_why_steps": _json_string("five_why_steps"),
+        "rc_summary": _json_string("rc_summary"),
+        "containment_actions": _json_string("containment_actions"),
+        "permanent_actions": _json_string("permanent_actions"),
+        "yokoten_actions": _json_string("yokoten_actions"),
+        "auto_fill": auto_fill,
+    }
+
+
+async def _kimi_8d_skill_stream(
+    user_input: str,
+    session_id: str,
+    agent_id: str = None,
+    agent_task: str = None,
+) -> AsyncGenerator[dict, None]:
+    """Kimi K3 的完整 8D Skill 专用管线。
+
+    流程：当前智能体知识库检索 → 完整 Skill + 模板 + references 注入 →
+    K3 原生 JSON 参数提取 → 本地 8D 工具生成 xlsx/docx。
+    """
+    import json
+
+    history = get_session_history(session_id)
+    knowledge_context = ""
+
+    if agent_id:
+        search_tool = next(
+            (tool_obj for tool_obj in get_tools(web_search=False)
+             if tool_obj.name == "search_documents_tool"),
+            None,
+        )
+        if search_tool is not None:
+            yield {
+                "type": "tool",
+                "name": "search_documents_tool",
+                "display": TOOL_DISPLAY_NAMES.get(
+                    "search_documents_tool",
+                    "搜索文档",
+                ),
+            }
+            try:
+                knowledge_result = await search_tool.ainvoke({"query": user_input})
+                knowledge_context = (
+                    "\n\n## 当前智能体独立知识库检索结果\n"
+                    f"{knowledge_result}\n"
+                )
+            except Exception as exc:
+                logger.warning("Kimi 8D 知识库检索失败，继续使用完整 Skill: %s", exc)
+                knowledge_context = (
+                    "\n\n## 当前智能体知识库检索状态\n"
+                    f"检索失败：{exc}\n"
+                )
+            yield {
+                "type": "tool_done",
+                "name": "search_documents_tool",
+                "display": TOOL_DISPLAY_NAMES.get(
+                    "search_documents_tool",
+                    "搜索文档",
+                ),
+            }
+
+    full_skill_context = _load_8d_skill_context("8d-skill", user_input)
+    if not full_skill_context:
+        yield {"type": "error", "content": "8D Skill 完整内容加载失败，请检查 skills/8d-skill"}
+        yield {"type": "done"}
+        return
+
+    resolved_task = _resolve_agent_task(agent_task, agent_id)
+    role_context = (
+        f"# 当前智能体角色\n{resolved_task}\n"
+        if resolved_task
+        else "# 当前任务\n按照完整 8D Skill 生成汽车行业 8D 报告。\n"
+    )
+    full_prompt = (
+        _inject_current_date(role_context)
+        + full_skill_context
+        + knowledge_context
+    )
+
+    yield {"type": "thinking", "content": "正在按完整8D Skill分析并生成报告..."}
+    try:
+        arguments = await asyncio.to_thread(
+            _call_kimi_8d_arguments,
+            full_prompt,
+            user_input,
+        )
+    except Exception as exc:
+        logger.error("Kimi K3 原生 8D 参数提取失败: %s", exc, exc_info=True)
+        yield {"type": "error", "content": f"Kimi K3 解析8D需求失败: {exc}"}
+        yield {"type": "done"}
+        return
+
+    report_tool = next(
+        (tool_obj for tool_obj in get_tools(web_search=False)
+         if tool_obj.name == "generate_8d_report_tool"),
+        None,
+    )
+    if report_tool is None:
+        yield {"type": "error", "content": "8D报告生成工具未加载"}
+        yield {"type": "done"}
+        return
+
+    yield {
+        "type": "tool",
+        "name": "generate_8d_report_tool",
+        "display": TOOL_DISPLAY_NAMES.get(
+            "generate_8d_report_tool",
+            "生成8D报告",
+        ),
+    }
+    try:
+        tool_result = await asyncio.to_thread(report_tool.invoke, arguments)
+    except Exception as exc:
+        logger.error("Kimi 8D 本地报告生成失败: %s", exc, exc_info=True)
+        yield {
+            "type": "tool_done",
+            "name": "generate_8d_report_tool",
+            "display": TOOL_DISPLAY_NAMES.get(
+                "generate_8d_report_tool",
+                "生成8D报告",
+            ),
+        }
+        yield {"type": "error", "content": f"8D报告生成失败: {exc}"}
+        yield {"type": "done"}
+        return
+
+    yield {
+        "type": "tool_done",
+        "name": "generate_8d_report_tool",
+        "display": TOOL_DISPLAY_NAMES.get(
+            "generate_8d_report_tool",
+            "生成8D报告",
+        ),
+    }
+    if isinstance(tool_result, str):
+        full_response = tool_result
+    else:
+        full_response = json.dumps(tool_result, ensure_ascii=False)
+
+    for index in range(0, len(full_response), 12):
+        yield {"type": "token", "content": full_response[index:index + 12]}
+        await asyncio.sleep(0)
+
+    try:
+        history.add_message(HumanMessage(content=user_input))
+        history.add_message(AIMessage(content=full_response))
+    except Exception:
+        logger.warning("Kimi 8D 会话历史保存失败", exc_info=True)
+
+    yield {"type": "done"}
+
+
 # [BUG FIX] 整体超时保护：Agent 对话最大允许时长（秒）
 # 超过此时间强制结束，避免 LLM API 挂起导致服务器无响应需 Ctrl+C
 AGENT_STREAM_TIMEOUT = 180  # 3分钟
@@ -1426,7 +1705,22 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
     
     # [BUG FIX v6] 获取或创建 session 级取消事件（自动取消上一个幽灵任务）
     cancel_event = _get_or_create_cancel_event(session_id)
-    
+
+    # [BUG FIX v16] Kimi K3 + 8D 使用官方原生 JSON Agent 管线。
+    # 完整加载 SKILL.md、匹配模板和 references，并检索当前智能体知识库；
+    # 仅绕开会把 Moonshot 400 包装成 Connection error 的 LangChain tool_calls 层。
+    resolved_model = resolve_model_id(settings.LLM_MODEL)
+    if skill == "8d-skill" and resolved_model in KIMI_MODELS:
+        async for chunk in _kimi_8d_skill_stream(
+            user_input,
+            session_id,
+            agent_id=agent_id,
+            agent_task=resolved_agent_task,
+        ):
+            yield chunk
+        _cleanup_session_cancel(session_id)
+        return
+
     # 性能优化：意图路由 - 简单问题走Chat模式（跳过Agent循环，减少3-5秒延迟）
     # Skill 必须保留 Agent 工具调用能力；“FMEA”“8D”等短输入不能进入 Chat 模式。
     if mode == "agent" and not skill and _is_simple_query(user_input) and not web_search:
