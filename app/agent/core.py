@@ -1100,7 +1100,12 @@ def _build_chat_prompt(agent_task: str, agent_id: str = None) -> str:
 _agent_prompt_graph_cache = {}  # cache_key -> compiled graph
 _AGENT_PROMPT_CACHE_MAX_SIZE = 8  # 最多缓存 8 个不同的自定义 Agent 图
 
-def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, skill_mode: bool = False):
+def get_agent_with_prompt(
+    custom_system_prompt: str,
+    web_search: bool = False,
+    skill_mode: bool = False,
+    skill: str = None,
+):
     """获取带有自定义系统提示词的 Agent 实例
     
     [优化2] 按 prompt hash + web_search 缓存编译后的 Agent Graph，
@@ -1109,17 +1114,41 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
     """
     # 生成缓存 key
     prompt_hash = hashlib.md5(custom_system_prompt.encode()).hexdigest()[:16]
-    cache_key = f"{prompt_hash}:{web_search}:{skill_mode}"
+    resolved_model = resolve_model_id(settings.LLM_MODEL)
+    cache_key = f"{prompt_hash}:{web_search}:{skill_mode}:{skill or ''}:{resolved_model}"
     
     if cache_key in _agent_prompt_graph_cache:
         logger.debug(f"Agent Graph 缓存命中: prompt_hash={prompt_hash}, web_search={web_search}")
         _agent_prompt_graph_timestamps[cache_key] = time.time()  # [性能修复] 更新访问时间
         return _agent_prompt_graph_cache[cache_key]
     
-    llm = create_llm(skill_mode=skill_mode)
+    _is_kimi_for_sanitize = settings.LLM_MODEL in KIMI_MODELS or resolved_model in KIMI_MODELS
+    # FMEA 是唯一已确认会稳定触发 Kimi 长响应中断的 Skill。
+    # 直接从首轮使用非流式请求，并由 SSE 心跳维持浏览器连接；
+    # 8D 和所有非 Kimi 模型仍保持原来的流式行为。
+    force_fmea_non_streaming = (
+        _is_kimi_for_sanitize and skill == "pfmea-dfmea-skill"
+    )
+    llm = create_llm(
+        skill_mode=skill_mode,
+        force_non_streaming=force_fmea_non_streaming,
+    )
     tools = get_tools(web_search=web_search)
+    # [BUG FIX v13] 仅 Kimi K3 的 Skill 模式按需挂载当前报告工具。
+    # 其他模型保持原有完整工具列表和调用逻辑。
+    skill_tool_names = {
+        "8d-skill": {"generate_8d_report_tool"},
+        "pfmea-dfmea-skill": {"generate_fmea_report_tool"},
+    }
+    if _is_kimi_for_sanitize and skill in skill_tool_names:
+        allowed_names = skill_tool_names[skill]
+        tools = [tool_obj for tool_obj in tools if tool_obj.name in allowed_names]
+        logger.info(
+            "Skill 按需加载工具: skill=%s, tools=%s",
+            skill,
+            [tool_obj.name for tool_obj in tools],
+        )
     # [BUG FIX v12] Kimi K3 时清理 tool schema（移除 boolean 类型，Moonshot 不接受）
-    _is_kimi_for_sanitize = settings.LLM_MODEL in KIMI_MODELS or resolve_model_id(settings.LLM_MODEL) in KIMI_MODELS
     tools = _sanitize_tools_for_moonshot(tools, _is_kimi_for_sanitize)
     llm_with_tools = llm.bind_tools(tools)
 
@@ -1183,14 +1212,24 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
                 # 这样首次调用保持流式（8D skill 已验证可用），
                 # 重试时升级为非流式以应对 FMEA skill 大 context 场景
                 try:
-                    force_non_streaming = (attempt >= 2)
-                    use_short_response = (attempt >= 3)
+                    # attempt 是刚失败的调用；重建的是下一次调用的实例。
+                    next_attempt = attempt + 1
+                    if _is_kimi_for_sanitize:
+                        force_non_streaming = (next_attempt >= 2)
+                        use_short_response = (next_attempt >= 3)
+                    else:
+                        # 非 Kimi 模型保持 v12 原有重试行为。
+                        force_non_streaming = (attempt >= 2)
+                        use_short_response = (attempt >= 3)
                     rebuild_reason = []
                     if force_non_streaming:
                         rebuild_reason.append("streaming=False")
                     if use_short_response:
                         rebuild_reason.append("short_response=True")
-                    logger.info(f"think() 第 {attempt}/{max_retries} 次重试，重建 LLM 实例（{', '.join(rebuild_reason) or '默认参数'}）")
+                    logger.info(
+                        f"think() 准备第 {next_attempt}/{max_retries} 次调用，"
+                        f"重建 LLM 实例（{', '.join(rebuild_reason) or '默认参数'}）"
+                    )
                     new_llm = create_llm(
                         skill_mode=skill_mode,
                         force_non_streaming=force_non_streaming,
@@ -1283,7 +1322,12 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
         history.add_message(AIMessage(content=full_response))
         return full_response
 
-    agent = get_agent_with_prompt(custom_prompt, web_search=web_search, skill_mode=bool(skill))
+    agent = get_agent_with_prompt(
+        custom_prompt,
+        web_search=web_search,
+        skill_mode=bool(skill),
+        skill=skill,
+    )
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     all_messages = recent_messages + [HumanMessage(content=user_input)]
@@ -1358,7 +1402,8 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
     cancel_event = _get_or_create_cancel_event(session_id)
     
     # 性能优化：意图路由 - 简单问题走Chat模式（跳过Agent循环，减少3-5秒延迟）
-    if mode == "agent" and _is_simple_query(user_input) and not web_search:
+    # Skill 必须保留 Agent 工具调用能力；“FMEA”“8D”等短输入不能进入 Chat 模式。
+    if mode == "agent" and not skill and _is_simple_query(user_input) and not web_search:
         logger.info(f"意图路由：检测到简单问题，自动走Chat模式加速响应")
         mode = "chat"
     
@@ -1378,15 +1423,20 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         skill_ctx = _load_8d_skill_context(skill, user_input) or _load_fmea_skill_context(skill, user_input)
         if skill_ctx:
             custom_system_prompt = custom_system_prompt + skill_ctx
-    if resolved_agent_task:
-        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search, skill_mode=bool(skill))
-    else:
-        agent = get_agent_with_prompt(custom_system_prompt, web_search=web_search, skill_mode=bool(skill))
+    agent = get_agent_with_prompt(
+        custom_system_prompt,
+        web_search=web_search,
+        skill_mode=bool(skill),
+        skill=skill,
+    )
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     all_messages = recent_messages + [HumanMessage(content=user_input)]
 
     full_response = ""
+    # 非流式降级只产生 on_chat_model_end；保存完整输出，避免误判为空后
+    # 再次执行整套 FMEA 工作流并重复生成文件。
+    last_model_content = ""
     start_time = time.time()
     
     # [BUG FIX] 跟踪已启动但未完成的工具，异常时自动发送 tool_done
@@ -1420,6 +1470,12 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
                 if content:
                     full_response += content
                     yield {"type": "token", "content": content}
+
+            elif kind == "on_chat_model_end":
+                output = event.get("data", {}).get("output")
+                content = _extract_content(output)
+                if content:
+                    last_model_content = content
 
             elif kind == "on_tool_start":
                 tool_name = event.get("name", "")
@@ -1514,7 +1570,14 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
             _cleanup_session_cancel(session_id)
             return
 
-    # 流式输出为空时回退到非流式
+    # 非流式降级已经成功时直接转发完整结果，不重复执行 Agent。
+    if not full_response and last_model_content:
+        full_response = last_model_content
+        for i in range(0, len(full_response), 12):
+            yield {"type": "token", "content": full_response[i:i+12]}
+            await asyncio.sleep(0)
+
+    # 流式和非流式事件都没有正文时才执行最后兜底。
     if not full_response:
         try:
             result = await asyncio.wait_for(

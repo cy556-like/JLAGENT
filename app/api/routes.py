@@ -71,6 +71,10 @@ async def _sse_stream_wrapper(
     queue = asyncio.Queue()
     stream_done = object()
     cancelled_by_client = False
+    # Kimi FMEA 非流式处理期间可能几十秒没有正文事件。
+    # 定期发送 SSE 注释心跳，防止代理或浏览器关闭仍在工作的连接。
+    heartbeat_interval = 12.0
+    last_event_sent_at = time.monotonic()
     
     async def produce():
         nonlocal cancelled_by_client
@@ -108,7 +112,10 @@ async def _sse_stream_wrapper(
             try:
                 chunk = await asyncio.wait_for(queue.get(), timeout=0.5)
             except asyncio.TimeoutError:
-                # 超时后回到循环顶部检查 disconnect
+                now = time.monotonic()
+                if now - last_event_sent_at >= heartbeat_interval:
+                    yield ": keep-alive\n\n"
+                    last_event_sent_at = now
                 continue
             
             if chunk is stream_done:
@@ -116,8 +123,10 @@ async def _sse_stream_wrapper(
             if isinstance(chunk, dict) and chunk.get('type') == 'error':
                 yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
                 yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
+                last_event_sent_at = time.monotonic()
                 break
             yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+            last_event_sent_at = time.monotonic()
     except asyncio.CancelledError:
         logger.info(f"SSE流被取消（外部信号）: session={session_id}")
         producer_task.cancel()
