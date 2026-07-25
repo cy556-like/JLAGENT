@@ -3053,7 +3053,6 @@ html { scroll-behavior: smooth; }
 
 @media (max-width: 768px) {
     .help-btn { padding: 6px 8px; }
-    .help-label { display: none; }
     .help-popover {
         position: fixed;
         top: 58px;
