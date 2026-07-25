@@ -427,7 +427,7 @@ _llm_cache = {}  # cache_key -> {"instance": ChatOpenAI, "created_at": float}
 _LLM_CACHE_TTL = 900  # 15分钟，短于代理/服务端典型空闲超时（60-120s）
 
 def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override: str = None, 
-               short_response: bool = False, skill_mode: bool = False):
+               short_response: bool = False, skill_mode: bool = False, force_non_streaming: bool = False):
     """创建 LLM 实例（启用 streaming 支持，支持备用Key自动切换）
     
     [优化1] 使用缓存：按 (model, api_key, base_url, temperature) 作为缓存 key，
@@ -441,6 +441,8 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
         short_response: 是否为短回复场景（降低 max_tokens 加速推理）
         skill_mode: 是否为 8D/FMEA skill 模式（复杂长输出场景，需要降级 Kimi K3 的
                     reasoning_effort 以避免 Moonshot 流式响应被服务端中断）
+        force_non_streaming: 强制使用非流式 HTTP 请求（绕过 Moonshot 流式响应中断）
+                            用于 think() 重试时切换，FMEA skill 大 context 场景必需
     """
     global _primary_key_failed
     selected_model = model_override or settings.LLM_MODEL
@@ -561,7 +563,7 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
 
     # [优化1] 检查缓存，复用已有的 ChatOpenAI 实例（带 TTL 检查）
     # 将输出上限、超时和推理强度纳入缓存键，避免不同模式错误复用客户端
-    cache_key = (model, api_key, base_url, temperature, max_tokens, request_timeout, reasoning_effort, skill_mode)
+    cache_key = (model, api_key, base_url, temperature, max_tokens, request_timeout, reasoning_effort, skill_mode, force_non_streaming)
     if cache_key in _llm_cache:
         entry = _llm_cache[cache_key]
         if time.time() - entry["created_at"] < _LLM_CACHE_TTL:
@@ -581,11 +583,16 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     # - temperature=None 时不传该字段（避免 langchain 警告 + Moonshot 服务端冲突）
     # - reasoning_effort 用顶层字段（langchain_openai 1.4+ 原生支持，无需 model_kwargs）
     # - 移除 model_kwargs 透传（消除 UserWarning）
+    # [BUG FIX v11] streaming 智能切换：
+    # - 默认 True（保持现有行为，8D skill 已验证可用）
+    # - force_non_streaming=True 时设为 False，绕过 Moonshot 流式响应中断
+    #   用于 think() 重试时切换，FMEA skill 大 context 场景必需
+    use_streaming = not force_non_streaming
     llm_kwargs = {
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
-        "streaming": True,
+        "streaming": use_streaming,
         "max_tokens": max_tokens,
         "request_timeout": request_timeout,
     }
@@ -1041,10 +1048,26 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
                 if not retryable or attempt >= max_retries:
                     logger.error(f"think() 第 {attempt}/{max_retries} 次调用失败（不可重试或已用完重试）: {e}", exc_info=True)
                     raise
-                logger.warning(f"think() 第 {attempt}/{max_retries} 次调用失败（网络中断，将重试）: {e}")
-                # 重建 LLM 实例（清空死掉的 TCP 连接）
+                logger.warning(f"think() 第 {attempt}/{max_retries} 次调用失败（网络中断，将重试，下次切换非流式）: {e}")
+                # [BUG FIX v11] 智能降级重试：
+                # - 第 1 次重试（attempt=2）：切换 streaming=False，绕过 Moonshot 流式中断
+                # - 第 2 次重试（attempt=3）：streaming=False + short_response=True（max_tokens 减半）
+                # 这样首次调用保持流式（8D skill 已验证可用），
+                # 重试时升级为非流式以应对 FMEA skill 大 context 场景
                 try:
-                    new_llm = create_llm(skill_mode=skill_mode)
+                    force_non_streaming = (attempt >= 2)
+                    use_short_response = (attempt >= 3)
+                    rebuild_reason = []
+                    if force_non_streaming:
+                        rebuild_reason.append("streaming=False")
+                    if use_short_response:
+                        rebuild_reason.append("short_response=True")
+                    logger.info(f"think() 第 {attempt}/{max_retries} 次重试，重建 LLM 实例（{', '.join(rebuild_reason) or '默认参数'}）")
+                    new_llm = create_llm(
+                        skill_mode=skill_mode,
+                        force_non_streaming=force_non_streaming,
+                        short_response=use_short_response,
+                    )
                     llm_with_tools = new_llm.bind_tools(tools)
                 except Exception as rebuild_e:
                     logger.error(f"think() 重建 LLM 实例失败: {rebuild_e}", exc_info=True)
@@ -1484,9 +1507,10 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
             if retryable and retry_count < max_retry:
                 retry_count += 1
                 logger.warning(f"_chat_mode_stream 流式响应中断，重建 LLM 实例并重试 (第 {retry_count}/{max_retry} 次): {e}")
-                # 重建 LLM 实例（清空可能死掉的 TCP 连接）
+                # [BUG FIX v11] 重建 LLM 实例时切换非流式（绕过 Moonshot 流式中断）
                 try:
-                    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=bool(skill))
+                    logger.info(f"_chat_mode_stream 第 {retry_count}/{max_retry} 次重试，切换 streaming=False")
+                    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=bool(skill), force_non_streaming=True)
                 except Exception as rebuild_e:
                     logger.error(f"_chat_mode_stream 重建 LLM 失败: {rebuild_e}", exc_info=True)
                     yield {"type": "error", "content": f"处理失败: {str(e)}"}
