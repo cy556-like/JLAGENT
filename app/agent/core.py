@@ -610,6 +610,128 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     logger.info(f"LLM Client 已创建并缓存: model={model}, max_tokens={max_tokens}, timeout={request_timeout}s, 缓存数量={len(_llm_cache)}")
     return llm
 
+def _sanitize_tools_for_moonshot(tools, is_kimi: bool):
+    """[BUG FIX v12] 对 Kimi K3/Moonshot 模型清理 tool schema
+    
+    Moonshot API 不接受 JSON Schema 中的 "type": "boolean" 字段：
+    - 论坛确认：https://forum.moonshot.ai/t/tool-calling-specification-violation-on-moonshot-api/102
+    - 报错："the scalar type boolean is not permitted"
+    - 流式响应中 Moonshot 服务端遇到 invalid schema 会中断流
+      （peer closed connection without sending complete message body）
+    
+    修复方式：把 boolean 类型转换为 string + enum，对模型行为无影响
+    - "type": "boolean" → "type": "string", "enum": ["true", "false"]
+    - 默认值 False → "false"，True → "true"
+    
+    实现要点（避免污染全局 tool 缓存）：
+    - 用 pydantic.create_model 动态创建新 schema 类（不修改原 schema）
+    - 用 StructuredTool.from_function 重建 tool（不修改原 tool）
+    - 原 tool 和 args_schema 完全不变，可继续给其他模型使用
+    
+    仅对 Kimi K3 调用，其他模型（DeepSeek/GLM/Qwen 等）不做处理，零影响。
+    
+    Args:
+        tools: langchain Tool 列表
+        is_kimi: 是否为 Kimi K3 模型
+        
+    Returns:
+        清理后的 tools 列表（如果是 Kimi K3，返回新 tool；否则原样返回）
+    """
+    if not is_kimi:
+        return tools  # 其他模型不需要清理
+    
+    from pydantic import Field, create_model
+    from langchain_core.tools import StructuredTool
+    
+    sanitized = []
+    boolean_converted_count = 0
+    
+    for tool_obj in tools:
+        # 获取 args_schema（Pydantic BaseModel）
+        if not hasattr(tool_obj, "args_schema") or tool_obj.args_schema is None:
+            sanitized.append(tool_obj)
+            continue
+        
+        orig_schema = tool_obj.args_schema
+        
+        # 检查是否有 bool 字段（包括 Optional[bool]）
+        has_bool = any("bool" in str(f.annotation) for f in orig_schema.model_fields.values())
+        if not has_bool:
+            sanitized.append(tool_obj)  # 无 bool 字段，无需 sanitize
+            continue
+        
+        # 动态创建新 model：把 bool → str with enum
+        try:
+            new_fields = {}
+            for field_name, field_info in orig_schema.model_fields.items():
+                annotation_str = str(field_info.annotation)
+                if "bool" in annotation_str:
+                    # bool → str
+                    if field_info.default is True:
+                        default_val = "true"
+                    elif field_info.default is False:
+                        default_val = "false"
+                    else:
+                        default_val = "false"
+                    extra = dict(field_info.json_schema_extra) if isinstance(field_info.json_schema_extra, dict) else {}
+                    extra["enum"] = ["true", "false"]
+                    new_fields[field_name] = (str, Field(
+                        default=default_val,
+                        description=field_info.description,
+                        json_schema_extra=extra,
+                    ))
+                    boolean_converted_count += 1
+                    logger.debug(f"[Moonshot schema sanitize] 工具 {tool_obj.name} 字段 {field_name}: bool → string+enum")
+                else:
+                    # 保持原样
+                    new_fields[field_name] = (field_info.annotation, Field(
+                        default=field_info.default,
+                        description=field_info.description,
+                        json_schema_extra=field_info.json_schema_extra,
+                    ))
+            
+            # 用 create_model 创建新 schema 类
+            new_schema = create_model(f"{tool_obj.name}_moonshot_safe", **new_fields)
+            
+            # [BUG FIX v12] 包装原 func：把 string "true"/"false" 转回 bool
+            # 否则 Python 中 "false" 是 truthy 字符串，会导致 if auto_fill: 永远为真
+            bool_field_names = [
+                fname for fname, finfo in orig_schema.model_fields.items()
+                if "bool" in str(finfo.annotation)
+            ]
+            orig_func = tool_obj.func
+            def make_bool_wrapper(_orig_func, _bool_names):
+                def _wrapper(**kwargs):
+                    for _fname in _bool_names:
+                        if _fname in kwargs and isinstance(kwargs[_fname], str):
+                            kwargs[_fname] = kwargs[_fname].lower() == "true"
+                    return _orig_func(**kwargs)
+                _wrapper.__name__ = getattr(_orig_func, "__name__", "wrapper")
+                _wrapper.__doc__ = getattr(_orig_func, "__doc__", "")
+                return _wrapper
+            wrapped_func = make_bool_wrapper(orig_func, bool_field_names)
+            
+            # 用 StructuredTool.from_function 重建 tool（不修改原 tool）
+            new_tool = StructuredTool.from_function(
+                func=wrapped_func,
+                name=tool_obj.name,
+                description=tool_obj.description,
+                args_schema=new_schema,
+                return_direct=getattr(tool_obj, "return_direct", False),
+                verbose=getattr(tool_obj, "verbose", False),
+                tags=list(getattr(tool_obj, "tags", []) or []),
+            )
+            sanitized.append(new_tool)
+        except Exception as e:
+            logger.warning(f"[Moonshot schema sanitize] 工具 {tool_obj.name} 清理失败（回退到原 tool）: {e}", exc_info=True)
+            sanitized.append(tool_obj)  # 失败则用原 tool
+            continue
+    
+    if boolean_converted_count > 0:
+        logger.info(f"[Moonshot schema sanitize] 已为 Kimi K3 清理 {boolean_converted_count} 个 bool 字段 → string+enum")
+    
+    return sanitized
+
 def _check_and_switch_to_backup(error_exception):
     """检测到401错误时，自动切换到备用Key"""
     global _primary_key_failed
@@ -704,6 +826,9 @@ def create_agent_graph(web_search: bool = False, skill_mode: bool = False):
     """
     llm = create_llm(skill_mode=skill_mode)
     tools = get_tools(web_search=web_search)
+    # [BUG FIX v12] Kimi K3 时清理 tool schema（移除 boolean 类型，Moonshot 不接受）
+    _is_kimi_for_sanitize = settings.LLM_MODEL in KIMI_MODELS or resolve_model_id(settings.LLM_MODEL) in KIMI_MODELS
+    tools = _sanitize_tools_for_moonshot(tools, _is_kimi_for_sanitize)
     llm_with_tools = llm.bind_tools(tools)
     system_prompt = SYSTEM_PROMPT_WITH_WEB_SEARCH if web_search else SYSTEM_PROMPT
     # [Prompt Caching] 不在 system prompt 尾部注入日期（会破坏前缀缓存）
@@ -993,6 +1118,9 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
     
     llm = create_llm(skill_mode=skill_mode)
     tools = get_tools(web_search=web_search)
+    # [BUG FIX v12] Kimi K3 时清理 tool schema（移除 boolean 类型，Moonshot 不接受）
+    _is_kimi_for_sanitize = settings.LLM_MODEL in KIMI_MODELS or resolve_model_id(settings.LLM_MODEL) in KIMI_MODELS
+    tools = _sanitize_tools_for_moonshot(tools, _is_kimi_for_sanitize)
     llm_with_tools = llm.bind_tools(tools)
 
     async def think(state: AgentState):
@@ -1068,6 +1196,7 @@ def get_agent_with_prompt(custom_system_prompt: str, web_search: bool = False, s
                         force_non_streaming=force_non_streaming,
                         short_response=use_short_response,
                     )
+                    # [BUG FIX v12] 重建后也需要 sanitize tools（与首次一致）
                     llm_with_tools = new_llm.bind_tools(tools)
                 except Exception as rebuild_e:
                     logger.error(f"think() 重建 LLM 实例失败: {rebuild_e}", exc_info=True)
