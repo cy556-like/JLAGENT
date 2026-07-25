@@ -1134,9 +1134,10 @@ def get_agent_with_prompt(
         force_non_streaming=force_fmea_non_streaming,
     )
     tools = get_tools(web_search=web_search)
-    # [BUG FIX v13] 仅 Kimi K3 的 FMEA 模式按需挂载报告工具。
-    # 已正常工作的 8D 和其他模型保持原有完整工具列表与调用逻辑。
+    # [BUG FIX v14] Kimi K3 的 Skill 模式仅挂载对应报告工具，避免把全部
+    # 工具 schema 一并发送给 Moonshot；其他模型仍保持原有完整工具列表。
     skill_tool_names = {
+        "8d-skill": {"generate_8d_report_tool"},
         "pfmea-dfmea-skill": {"generate_fmea_report_tool"},
     }
     if _is_kimi_for_sanitize and skill in skill_tool_names:
@@ -1199,7 +1200,11 @@ def get_agent_with_prompt(
                     "read timeout",
                     "remotedisconnected",
                     "chunked encoding",
-                ])
+                ]) or (
+                    _is_kimi_for_sanitize
+                    and skill == "8d-skill"
+                    and "connection error" in err_msg
+                )
                 last_exc = e
                 if not retryable or attempt >= max_retries:
                     logger.error(f"think() 第 {attempt}/{max_retries} 次调用失败（不可重试或已用完重试）: {e}", exc_info=True)
