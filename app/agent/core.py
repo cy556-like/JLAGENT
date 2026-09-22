@@ -426,7 +426,7 @@ _primary_key_lock = threading.Lock()  # [BUG FIX] 并发安全
 _llm_cache = {}  # cache_key -> {"instance": ChatOpenAI, "created_at": float}
 _LLM_CACHE_TTL = 900  # 15分钟，短于代理/服务端典型空闲超时（60-120s）
 
-def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override: str = None, 
+def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_override: str = None, 
                short_response: bool = False, skill_mode: bool = False, force_non_streaming: bool = False):
     """创建 LLM 实例（启用 streaming 支持，支持备用Key自动切换）
     
@@ -478,7 +478,11 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     # [GLM] 检测是否为GLM模型，使用阿里云百炼平台（兼容模式代理智谱模型）
     is_glm = model in GLM_MODELS
     
-    if is_volcengine and settings.DEEPSEEK_API_KEY:
+    if model == "DeepSeek-V4.1-Flash":
+        api_key = settings.DEEPSEEK_V41_API_KEY
+        base_url = settings.DEEPSEEK_V41_BASE_URL
+        model = settings.DEEPSEEK_V41_MODEL
+    elif is_volcengine and settings.DEEPSEEK_API_KEY:
         api_key = settings.DEEPSEEK_API_KEY
         base_url = settings.DEEPSEEK_BASE_URL
         logger.info(f"火山引擎模型检测到（{model}），使用火山引擎 Coding API: {base_url}")
@@ -609,6 +613,14 @@ def create_llm(deep_think: bool = False, fast_mode: bool = False, model_override
     _llm_cache[cache_key] = {"instance": llm, "created_at": time.time()}
     logger.info(f"LLM Client 已创建并缓存: model={model}, max_tokens={max_tokens}, timeout={request_timeout}s, 缓存数量={len(_llm_cache)}")
     return llm
+
+def create_llm(deep_think=False, fast_mode=False, model_override=None,
+               short_response=False, skill_mode=False, force_non_streaming=False):
+    from app.agent.model_routing import RoutedLLM
+    return RoutedLLM(_create_llm_client, model_override or settings.LLM_MODEL, dict(
+        deep_think=deep_think, fast_mode=fast_mode, short_response=short_response,
+        skill_mode=skill_mode, force_non_streaming=force_non_streaming))
+
 
 def _sanitize_tools_for_moonshot(tools, is_kimi: bool):
     """[BUG FIX v12] 对 Kimi K3/Moonshot 模型清理 tool schema

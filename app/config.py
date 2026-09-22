@@ -7,6 +7,7 @@
 """
 import os
 import logging
+from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -24,7 +25,7 @@ AVAILABLE_MODELS = [
     # 自动模式（默认）：当前固定指向 GLM-5.2，后续可扩展为按任务路由
     {"id": AUTO_MODEL_ID, "name": "Auto", "desc": "自动选择模型，当前默认使用 GLM-5.2"},
     # DeepSeek 系列（火山引擎）
-    {"id": "DeepSeek-V4-Flash", "name": "DeepSeek-V4-Flash", "desc": "DeepSeek快速版，性价比高"},
+    {"id": "DeepSeek-V4.1-Flash", "name": "Deepseek-V4.1-Flash", "desc": "DeepSeek V4.1 Flash"},
     # GLM 系列（火山引擎Ark，与豆包/DeepSeek共用套餐）
     {"id": "glm-5.2", "name": "GLM-5.2", "desc": "GLM旗舰，火山引擎Ark"},
     # 豆包系列（火山引擎）
@@ -89,6 +90,9 @@ class Settings:
     # DeepSeek / 豆包 独立配置（火山引擎Ark）
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", os.getenv("LLM_API_KEY", ""))
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3")
+    DEEPSEEK_V41_API_KEY: str = os.getenv("DEEPSEEK_V41_API_KEY", "")
+    DEEPSEEK_V41_BASE_URL: str = os.getenv("DEEPSEEK_V41_BASE_URL") or DEEPSEEK_BASE_URL
+    DEEPSEEK_V41_MODEL: str = os.getenv("DEEPSEEK_V41_MODEL") or "DeepSeek-V4.1-Flash"
 
     # 千问独立配置（阿里云DashScope）
     QWEN_API_KEY: str = os.getenv("QWEN_API_KEY", "")
@@ -144,9 +148,17 @@ class Settings:
 settings = Settings()
 
 
-def resolve_model_id(model_id: str) -> str:
+def resolve_model_id(model_id: str, now: datetime | None = None) -> str:
     """将前端选择值解析为实际调用的模型ID。"""
-    return AUTO_MODEL_TARGET if model_id == AUTO_MODEL_ID else model_id
+    model_id = AUTO_MODEL_TARGET if model_id == AUTO_MODEL_ID else model_id
+    if model_id == "DeepSeek-V4.1-Flash":
+        china = timezone(timedelta(hours=8))
+        current = now or datetime.now(china)
+        current = current.replace(tzinfo=china) if current.tzinfo is None else current.astimezone(china)
+        minute = current.hour * 60 + current.minute
+        if 540 <= minute < 720 or 840 <= minute < 1080:
+            return "DeepSeek-V4-Flash"
+    return model_id
 
 
 def get_effective_model() -> str:
