@@ -478,7 +478,8 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
     # [GLM] 检测是否为GLM模型，使用阿里云百炼平台（兼容模式代理智谱模型）
     is_glm = model in GLM_MODELS
     
-    if model == "DeepSeek-V4.1-Flash":
+    is_official_deepseek = model == "DeepSeek-V4.1-Flash"
+    if is_official_deepseek:
         api_key = settings.DEEPSEEK_V41_API_KEY
         base_url = settings.DEEPSEEK_V41_BASE_URL
         model = settings.DEEPSEEK_V41_MODEL
@@ -609,6 +610,9 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
 
     # [重要] 不设置 max_retries，避免超时时指数退避重试放大响应时间
     # 复杂任务（DFMEA等）LLM生成需要60-120s，重试会导致200-300s的卡死
+    if is_official_deepseek:
+        # Existing history drops reasoning_content; disable thinking for tool-round compatibility.
+        llm_kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
     llm = ChatOpenAI(**llm_kwargs)
     _llm_cache[cache_key] = {"instance": llm, "created_at": time.time()}
     logger.info(f"LLM Client 已创建并缓存: model={model}, max_tokens={max_tokens}, timeout={request_timeout}s, 缓存数量={len(_llm_cache)}")
@@ -746,6 +750,8 @@ def _sanitize_tools_for_moonshot(tools, is_kimi: bool):
 
 def _check_and_switch_to_backup(error_exception):
     """检测到401错误时，自动切换到备用Key"""
+    if settings.LLM_MODEL in {"DeepSeek-V4.1-Flash", "DeepSeek-V4-Flash"}:
+        return False  # Independent providers are retried by RoutedLLM, not the global key switch.
     global _primary_key_failed
     error_str = str(error_exception).lower()
     if ("401" in error_str or "authentication" in error_str or "令牌" in error_str) and settings.LLM_API_KEY_BACKUP:

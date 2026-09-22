@@ -7,8 +7,9 @@ logger = logging.getLogger(__name__)
 
 
 def capacity_error(error):
-    status = getattr(error, 'status_code', None)
-    return status in (402, 429) or any(word in str(error).lower() for word in (
+    status = getattr(error, 'status_code', None) or getattr(getattr(error, 'response', None), 'status_code', None)
+    return status in (401, 402, 429) or any(word in str(error).lower() for word in (
+        'authenticationerror', 'invalid_api_key', 'invalid api key', 'api key format is incorrect',
         'insufficient_quota', 'quota', 'rate limit', 'ratelimit',
         'insufficient balance', '余额不足', '额度', 'resource exhausted'))
 
@@ -56,7 +57,7 @@ class RoutedLLM:
                 if not capacity_error(error):
                     raise
                 last_error = error
-                logger.warning('Model capacity exhausted: %s; trying next configured model', model)
+                logger.warning('Model authentication/capacity failed: %s; trying next configured model', model)
         raise last_error
 
     async def ainvoke(self, messages, **kwargs):
@@ -67,7 +68,7 @@ class RoutedLLM:
                 if not capacity_error(error):
                     raise
                 last_error = error
-                logger.warning('Model capacity exhausted: %s; trying next configured model', model)
+                logger.warning('Model authentication/capacity failed: %s; trying next configured model', model)
         raise last_error
 
     async def astream(self, messages, **kwargs):
@@ -83,5 +84,5 @@ class RoutedLLM:
                 if emitted or not capacity_error(error):
                     raise
                 last_error = error
-                logger.warning('Model capacity exhausted: %s; trying next configured model', model)
+                logger.warning('Model authentication/capacity failed: %s; trying next configured model', model)
         raise last_error
