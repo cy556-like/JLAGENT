@@ -91,8 +91,8 @@ class Settings:
     DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", os.getenv("LLM_API_KEY", ""))
     DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3")
     DEEPSEEK_V41_API_KEY: str = os.getenv("DEEPSEEK_V41_API_KEY", "")
-    DEEPSEEK_V41_BASE_URL: str = os.getenv("DEEPSEEK_V41_BASE_URL") or DEEPSEEK_BASE_URL
-    DEEPSEEK_V41_MODEL: str = os.getenv("DEEPSEEK_V41_MODEL") or "DeepSeek-V4.1-Flash"
+    DEEPSEEK_V41_BASE_URL: str = os.getenv("DEEPSEEK_V41_BASE_URL") or "https://api.deepseek.com"
+    DEEPSEEK_V41_MODEL: str = os.getenv("DEEPSEEK_V41_MODEL") or "deepseek-flash"
 
     # 千问独立配置（阿里云DashScope）
     QWEN_API_KEY: str = os.getenv("QWEN_API_KEY", "")

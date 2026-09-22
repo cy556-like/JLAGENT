@@ -18,8 +18,8 @@ services:
       - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
       - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL}
       - DEEPSEEK_V41_API_KEY=${DEEPSEEK_V41_API_KEY}
-      - DEEPSEEK_V41_BASE_URL=${DEEPSEEK_V41_BASE_URL:-https://ark.cn-beijing.volces.com/api/coding/v3}
-      - DEEPSEEK_V41_MODEL=${DEEPSEEK_V41_MODEL:-DeepSeek-V4.1-Flash}
+      - DEEPSEEK_V41_BASE_URL=${DEEPSEEK_V41_BASE_URL:-https://api.deepseek.com}
+      - DEEPSEEK_V41_MODEL=${DEEPSEEK_V41_MODEL:-deepseek-flash}
       # 千问（阿里云）
       - QWEN_API_KEY=${QWEN_API_KEY}
       - QWEN_BASE_URL=${QWEN_BASE_URL}
