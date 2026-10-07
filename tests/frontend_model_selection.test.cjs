@@ -30,7 +30,7 @@ function harness() {
         fetch: async (url, options) => {
             requests.push({ url, options });
             return { ok: true, json: async () => ({ models: [{ id: 'auto', name: 'Auto' },
-                { id: 'kimi-k3', name: 'Kimi' }], current: 'auto', effective: 'glm-5.2', success: true }) };
+                { id: 'kimi-k3', name: 'Kimi' }], current: 'auto', effective: 'glm-5.3', success: true }) };
         },
         FormData: class {
             constructor() { this.values = new Map(); }
@@ -58,7 +58,7 @@ function pending() {
     let finish;
     const promise = new Promise(resolve => { finish = resolve; });
     return { promise, finish: current => finish({ ok: true, json: async () => ({ current, success: true,
-        models: [{ id: 'auto', name: 'Auto' }, { id: 'kimi-k3', name: 'Kimi' }], effective: 'glm-5.2' }) }) };
+        models: [{ id: 'auto', name: 'Auto' }, { id: 'kimi-k3', name: 'Kimi' }], effective: 'glm-5.3' }) }) };
 }
 
 test('load selector uses authenticated account and saved choice', async () => {

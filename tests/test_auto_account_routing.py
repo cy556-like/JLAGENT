@@ -33,6 +33,8 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[1]
+ARK_URL = 'https://ark.cn-beijing.volces.com/api/coding/v3'
+ARK_HOST = 'ark.cn-beijing.volces.com'
 
 
 def definitions(path, names, scope):
@@ -64,8 +66,8 @@ class IsolatedSource(unittest.TestCase):
         self.addCleanup(modules.stop)
         env = {'DATA_DIR': self.temp.name, 'LLM_MODEL': 'auto', 'LLM_API_KEY': 'test-default',
                'LLM_BASE_URL': 'https://default.invalid/v1', 'DEEPSEEK_API_KEY': 'test-ark',
-               'DEEPSEEK_BASE_URL': 'https://ark.invalid/v1',
-               'LLM_API_KEY_BACKUP': 'test-backup', 'LLM_BASE_URL_BACKUP': 'https://backup.invalid/v1'}
+               'DEEPSEEK_BASE_URL': ARK_URL, 'ARK_API_KEY_BACKUP': 'test-backup',
+               'LLM_API_KEY_BACKUP': 'old-zhipu-backup', 'LLM_BASE_URL_BACKUP': 'https://open.bigmodel.cn/api/anthropic'}
         with patch.dict(os.environ, env, clear=True):
             self.cfg = load_module('app.config', 'app/config.py')
         self.prefs = load_module('app.model_preferences', 'app/model_preferences.py')
@@ -83,34 +85,72 @@ class RoutingTests(IsolatedSource):
     def test_auto_uses_ark_and_ignores_shared_failure_flag(self):
         client = self.core['_create_llm_client'](model_override='auto')
         self.assertEqual((client.model, client.api_key, client.base_url),
-                         ('glm-5.2', 'test-ark', 'https://ark.invalid/v1'))
+                         ('glm-5.3', 'test-ark', ARK_URL))
 
     def test_explicit_backup_changes_key_and_endpoint(self):
-        primary = self.core['_create_llm_client'](model_override='glm-5.2')
-        backup = self.core['_create_llm_client'](model_override='glm-5.2', force_backup=True)
-        self.assertEqual((backup.api_key, backup.base_url), ('test-backup', 'https://backup.invalid/v1'))
+        primary = self.core['_create_llm_client'](model_override='glm-5.3')
+        backup = self.core['_create_llm_client'](model_override='glm-5.3', force_backup=True)
+        self.assertEqual((backup.api_key, backup.base_url), ('test-backup', ARK_URL))
         self.assertIsNot(primary, backup)
-        self.assertIs(primary, self.core['_create_llm_client'](model_override='glm-5.2'))
+        self.assertIs(primary, self.core['_create_llm_client'](model_override='glm-5.3'))
 
     def test_primary_candidate_order_unchanged(self):
-        self.assertEqual(self.routed().candidates(), ['glm-5.2', 'DeepSeek-V4-Flash', 'Doubao-Seed-2.0-pro'])
+        self.assertEqual(self.routed().candidates(), ['glm-5.3', 'DeepSeek-V4-Flash', 'doubao-seed-2.1-pro'])
         self.cfg.settings.QWEN_API_KEY = 'test-qwen'
         self.cfg.settings.MIMO_API_KEY = 'test-mimo'
-        self.assertEqual(self.routed().candidates(), ['glm-5.2', 'DeepSeek-V4-Flash', 'qwen3.7-plus',
-                                                      'mimo-v2.5-pro', 'Doubao-Seed-2.0-pro'])
+        self.assertEqual(self.routed().candidates(), ['glm-5.3', 'DeepSeek-V4-Flash', 'qwen3.7-plus',
+                                                      'mimo-v2.5-pro', 'doubao-seed-2.1-pro'])
 
     def test_missing_backup_pair_does_not_make_attempt(self):
         for attr in ('LLM_API_KEY_BACKUP', 'LLM_BASE_URL_BACKUP'):
             with self.subTest(attr=attr), patch.object(self.cfg.settings, attr, ''):
                 self.assertFalse(any(backup for _, backup in self.routed().targets()))
                 with self.assertRaises(ValueError):
-                    self.cfg.get_model_connection('glm-5.2', backup=True)
+                    self.cfg.get_model_connection('glm-5.3', backup=True)
 
     def test_duplicate_backup_and_vision_not_retried(self):
         self.cfg.settings.LLM_API_KEY_BACKUP = 'test-ark'
-        self.cfg.settings.LLM_BASE_URL_BACKUP = 'https://ark.invalid/v1/'
+        self.cfg.settings.LLM_BASE_URL_BACKUP = ARK_URL + '/'
         self.assertFalse(any(backup for _, backup in self.routed().targets()))
-        self.assertEqual(self.routed('glm-4v-flash').targets(), [('glm-4v-flash', False)])
+        self.assertEqual(self.routed('glm-4v-flash').targets(), [('glm-5.3-flash', False)])
+
+    def test_backup_uses_ark_model_not_selected_other_provider_id(self):
+        for model in ('kimi-k3', 'qwen3.7-plus', 'DeepSeek-V4.1-Flash'):
+            with self.subTest(model=model):
+                client = self.core['_create_llm_client'](model_override=model, force_backup=True, deep_think=True)
+                self.assertEqual((client.model, client.api_key, client.base_url), ('glm-5.3', 'test-backup', ARK_URL))
+                self.assertNotIn('reasoning_effort', vars(client))
+                self.assertNotIn('extra_body', vars(client))
+        client = self.core['_create_llm_client'](force_backup=True, fast_mode=True)
+        self.assertEqual(client.model, 'glm-5.3')
+
+    def test_backup_deduplicates_against_all_normal_candidates(self):
+        self.cfg.settings.QWEN_API_KEY = 'test-qwen'
+        self.cfg.settings.LLM_API_KEY_BACKUP = 'test-ark'
+        self.assertIn(('glm-5.3', False), self.routed('qwen3.7-plus').targets())
+        self.assertNotIn(('glm-5.3', True), self.routed('qwen3.7-plus').targets())
+        self.cfg.settings.LLM_API_KEY_BACKUP = 'test-backup'
+        self.assertEqual(self.routed('qwen3.7-plus').targets()[-1], ('glm-5.3', True))
+
+    def test_legacy_glm_and_vision_factory_ids_migrate(self):
+        for old, new in [('glm-5.2', 'glm-5.3'), ('glm-4v-flash', 'glm-5.3-flash')]:
+            with self.subTest(old=old):
+                client = self.core['_create_llm_client'](model_override=old)
+                self.assertEqual((client.model, client.api_key, client.base_url), (new, 'test-ark', ARK_URL))
+
+    def test_old_doubao_choices_route_to_seed21pro_on_ark(self):
+        for selected in ('Doubao-Seed-2.0-pro', 'doubao-seed-2.0-pro', 'Doubao-Seed-2.1-pro', 'doubao-seed-2.1-pro'):
+            with self.subTest(selected=selected):
+                client = self.core['_create_llm_client'](model_override=selected)
+                self.assertEqual((client.model, client.api_key, client.base_url), ('doubao-seed-2.1-pro', 'test-ark', ARK_URL))
+                self.assertEqual(self.routed(selected).candidates()[0], 'doubao-seed-2.1-pro')
+        self.assertNotIn('Doubao-Seed-2.0-pro', self.routed().candidates())
+
+    def test_missing_ark_key_does_not_send_generic_zhipu_key(self):
+        self.cfg.settings.DEEPSEEK_API_KEY = ''
+        for model in ('auto', 'glm-5.3', 'glm-4v-flash'):
+            with self.subTest(model=model), self.assertRaisesRegex(RuntimeError, 'ARK_API_KEY'):
+                self.core['_create_llm_client'](model_override=model)
 
     def test_provider_mapping_preserved(self):
         self.cfg.settings.QWEN_API_KEY = 'test-qwen'
@@ -142,7 +182,8 @@ class RoutingTests(IsolatedSource):
         def handle(request):
             data = json.loads(request.content)
             self.requests.append((request.url.host, request.headers['authorization'], data))
-            if request.url.host != 'backup.invalid' and not primary_ok:
+            self.assertEqual(str(request.url), ARK_URL + '/chat/completions')
+            if request.headers['authorization'] != 'Bearer test-backup' and not primary_ok:
                 return httpx.Response(status, json={'error': {'message': 'provider failure', 'type': 'error',
                                                              'code': 'invalid_api_key' if status == 401 else 'failure'}})
             if data.get('stream'):
@@ -164,15 +205,37 @@ class RoutingTests(IsolatedSource):
         self.transport(primary_ok=True)
         self.assertEqual(self.routed().invoke([HumanMessage(content='hi')]).content, 'OK')
         self.assertEqual(len(self.requests), 1)
-        self.assertEqual(self.requests[0][:2], ('ark.invalid', 'Bearer test-ark'))
-        self.assertEqual(self.requests[0][2]['model'], 'glm-5.2')
+        self.assertEqual(self.requests[0][:2], (ARK_HOST, 'Bearer test-ark'))
+        self.assertEqual(self.requests[0][2]['model'], 'glm-5.3')
 
     def test_real_sdk_auth_fallback_same_request_sync(self):
         self.transport()
         self.assertEqual(self.routed().invoke([HumanMessage(content='hi')]).content, 'OK')
-        self.assertEqual([item[0] for item in self.requests], ['ark.invalid'] * 3 + ['backup.invalid'])
+        self.assertEqual([item[0] for item in self.requests], [ARK_HOST] * 2)
         self.assertEqual(self.requests[-1][1], 'Bearer test-backup')
-        self.assertEqual(self.requests[-1][2]['model'], 'glm-5.2')
+        self.assertEqual(self.requests[-1][2]['model'], 'glm-5.3')
+
+    def test_auth_failure_skip_is_request_local_not_shared(self):
+        self.transport()
+        self.routed().invoke([HumanMessage(content='first')])
+        self.routed().invoke([HumanMessage(content='second')])
+        self.assertEqual([item[1] for item in self.requests],
+                         ['Bearer test-ark', 'Bearer test-backup'] * 2)
+
+    def test_quota_error_can_try_different_model_with_same_ark_key(self):
+        self.transport(status=429)
+        self.assertEqual(self.routed().invoke([HumanMessage(content='hi')]).content, 'OK')
+        self.assertEqual([item[2]['model'] for item in self.requests],
+                         ['glm-5.3', 'DeepSeek-V4-Flash', 'doubao-seed-2.1-pro', 'glm-5.3'])
+
+    def test_real_sdk_vision_request_stays_on_ark_vision_model(self):
+        self.transport(primary_ok=True)
+        content = [{'type': 'text', 'text': 'describe'},
+                   {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,dGVzdA=='}}]
+        self.assertEqual(self.routed('glm-4v-flash').invoke([HumanMessage(content=content)]).content, 'OK')
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(self.requests[0][2]['model'], 'glm-5.3-flash')
+        self.assertEqual(self.requests[0][2]['messages'][0]['content'][1]['type'], 'image_url')
 
     def test_real_sdk_auth_fallback_async_and_stream_with_tools(self):
         for kind in ('ainvoke', 'astream'):
@@ -186,7 +249,8 @@ class RoutingTests(IsolatedSource):
                         return (await routed.ainvoke([HumanMessage(content='hi')])).content
                     return ''.join([chunk.content async for chunk in routed.astream([HumanMessage(content='hi')])])
                 self.assertEqual(asyncio.run(run()), 'OK')
-                self.assertEqual(self.requests[-1][:2], ('backup.invalid', 'Bearer test-backup'))
+                self.assertEqual(self.requests[-1][:2], (ARK_HOST, 'Bearer test-backup'))
+                self.assertEqual(len(self.requests), 2)
                 self.assertIn('tools', self.requests[-1][2])
 
     def test_bad_request_not_routed_to_backup(self):
@@ -231,7 +295,75 @@ class RoutingTests(IsolatedSource):
                 self.assertEqual(len(attempts), 1)
 
 
+class ArkConfigurationTests(IsolatedSource):
+    def config(self, env):
+        with patch.dict(os.environ, env, clear=True):
+            return load_module('migration_test_config', 'app/config.py')
+
+    def test_old_zhipu_urls_and_keys_are_not_reused_for_chat_or_vision(self):
+        cfg = self.config({'DEEPSEEK_API_KEY': 'existing-ark', 'DEEPSEEK_BASE_URL': 'https://wrong.invalid/v1',
+                           'LLM_API_KEY': 'old-zhipu', 'LLM_BASE_URL': 'https://open.bigmodel.cn/api/paas/v4',
+                           'LLM_API_KEY_BACKUP': 'old-zhipu-backup',
+                           'LLM_BASE_URL_BACKUP': 'https://open.bigmodel.cn/api/anthropic',
+                           'GLM_API_KEY': 'old-glm-key', 'GLM_BASE_URL': 'https://open.bigmodel.cn/api/paas/v4',
+                           'VISION_API_KEY': 'old-vision-key', 'VISION_BASE_URL': 'https://open.bigmodel.cn/api/paas/v4'})
+        for model in ('glm-5.3', 'glm-5.3-flash', 'glm-5.2', 'glm-4v-flash'):
+            self.assertEqual(cfg.get_model_connection(model), ('existing-ark', ARK_URL))
+        self.assertEqual(cfg.get_model_connection('glm-5.3', backup=True), ('existing-ark', ARK_URL))
+        self.assertEqual((cfg.VISION_API_KEY, cfg.VISION_BASE_URL), ('existing-ark', ARK_URL))
+        self.assertEqual((cfg.settings.GLM_API_KEY, cfg.settings.GLM_BASE_URL), ('existing-ark', ARK_URL))
+        # Do not change the existing embedding model/Key/URL or rebuild its index.
+        self.assertEqual((cfg.settings.EMBEDDING_MODEL, cfg.settings.EMBEDDING_API_KEY,
+                          cfg.settings.EMBEDDING_BASE_URL),
+                         ('embedding-3', 'old-zhipu', 'https://open.bigmodel.cn/api/paas/v4'))
+
+    def test_explicit_ark_keys_take_priority_and_embedding_configuration_is_preserved(self):
+        cfg = self.config({'ARK_API_KEY': ' new-ark ', 'ARK_API_KEY_BACKUP': ' new-backup ',
+                           'DEEPSEEK_API_KEY': 'old-ark', 'EMBEDDING_MODEL': 'existing-model',
+                           'EMBEDDING_API_KEY': 'existing-embedding', 'EMBEDDING_BASE_URL': 'https://embedding.invalid/v1'})
+        self.assertEqual(cfg.get_model_connection('glm-5.3'), ('new-ark', ARK_URL))
+        self.assertEqual(cfg.get_model_connection('glm-5.3', backup=True), ('new-backup', ARK_URL))
+        self.assertEqual((cfg.settings.EMBEDDING_MODEL, cfg.settings.EMBEDDING_API_KEY,
+                          cfg.settings.EMBEDDING_BASE_URL),
+                         ('existing-model', 'existing-embedding', 'https://embedding.invalid/v1'))
+
+    def test_generic_legacy_keys_are_only_reused_for_exact_ark_coding_chat_endpoint(self):
+        cfg = self.config({'LLM_API_KEY': 'legacy-ark', 'LLM_BASE_URL': ARK_URL + '/',
+                           'LLM_API_KEY_BACKUP': 'legacy-ark-backup', 'LLM_BASE_URL_BACKUP': ARK_URL})
+        self.assertEqual(cfg.get_model_connection('glm-5.3'), ('legacy-ark', ARK_URL))
+        self.assertEqual(cfg.get_model_connection('glm-5.3', backup=True), ('legacy-ark-backup', ARK_URL))
+        for url in ('https://ark.cn-beijing.volces.com/api/coding',
+                    'https://ark.cn-beijing.volces.com/api/v3', 'https://[malformed',
+                    'https://open.bigmodel.cn/api/anthropic', 'https://ark.cn-beijing.volces.com.fake.invalid/api/coding/v3'):
+            with self.subTest(url=url):
+                cfg = self.config({'LLM_API_KEY': 'not-chat-ark', 'LLM_BASE_URL': url,
+                                   'LLM_API_KEY_BACKUP': 'not-chat-ark-backup', 'LLM_BASE_URL_BACKUP': url})
+                self.assertEqual(cfg.get_model_connection('glm-5.3'), ('', ARK_URL))
+                self.assertEqual(cfg.settings.LLM_API_KEY_BACKUP, '')
+
+    def test_whitespace_ark_override_does_not_hide_existing_key(self):
+        cfg = self.config({'ARK_API_KEY': '  ', 'ARK_API_KEY_BACKUP': '  ', 'DEEPSEEK_API_KEY': 'existing-ark'})
+        self.assertEqual(cfg.get_model_connection('glm-5.3'), ('existing-ark', ARK_URL))
+        self.assertEqual(cfg.get_model_connection('glm-5.3', backup=True), ('existing-ark', ARK_URL))
+
+    def test_old_server_default_and_catalogue_migrate_to_glm53(self):
+        cfg = self.config({'LLM_MODEL': 'glm-5.2'})
+        self.assertEqual(cfg.settings.LLM_MODEL, 'glm-5.3')
+        ids = {item['id'] for item in cfg.AVAILABLE_MODELS}
+        self.assertIn('glm-5.3', ids)
+        self.assertNotIn('glm-5.2', ids)
+        self.assertEqual(cfg.resolve_model_id('auto'), 'glm-5.3')
+
+
 class PreferenceTests(IsolatedSource):
+    def test_existing_glm52_preference_is_read_as_glm53_without_rewriting(self):
+        self.prefs.save_user_model('admin', 'auto')
+        path = self.prefs._path('admin')
+        path.write_text('{"model_id":"glm-5.2"}', encoding='utf-8')
+        before = path.read_bytes()
+        self.assertEqual(self.prefs.load_user_model('admin'), 'glm-5.3')
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(self.prefs.save_user_model('admin', 'glm-5.2'), 'glm-5.3')
     def test_accounts_and_process_default_are_isolated(self):
         self.prefs.save_user_model('admin', 'kimi-k3')
         self.prefs.save_user_model('quanzhiadmin', 'auto')
@@ -248,7 +380,7 @@ class PreferenceTests(IsolatedSource):
         self.assertEqual(self.prefs.load_user_model('admin'), 'kimi-k3')
 
     def test_atomic_concurrent_writes_leave_valid_json_no_temp_or_backup(self):
-        choices = ['auto', 'kimi-k3', 'glm-5.2'] * 10
+        choices = ['auto', 'kimi-k3', 'glm-5.3'] * 10
         with concurrent.futures.ThreadPoolExecutor(max_workers=6) as pool:
             list(pool.map(lambda model: self.prefs.save_user_model('admin', model), choices))
         self.assertIn(self.prefs.load_user_model('admin'), choices)
@@ -285,7 +417,7 @@ class PreferenceTests(IsolatedSource):
         results = [(child, child.communicate(timeout=30)) for child in children]
         for child, (out, err) in results:
             self.assertEqual(child.returncode, 0, err.decode('utf-8'))
-        self.assertIn(self.prefs.load_user_model('admin'), ['auto', 'kimi-k3', 'glm-5.2'])
+        self.assertIn(self.prefs.load_user_model('admin'), ['auto', 'kimi-k3', 'glm-5.3'])
 
 
 class APITests(IsolatedSource):
@@ -332,8 +464,33 @@ class APITests(IsolatedSource):
         self.assertTrue(result.json()['success'])
         self.assertEqual(self.client.get('/api/v1/models', headers=self.headers()).json()['current'], 'kimi-k3')
         other = self.client.get('/api/v1/models', headers=self.headers('quanzhiadmin')).json()
-        self.assertEqual((other['current'], other['effective']), ('auto', 'glm-5.2'))
+        self.assertEqual((other['current'], other['effective']), ('auto', 'glm-5.3'))
         self.assertEqual(self.cfg.settings.LLM_MODEL, 'auto')
+
+    def test_old_client_glm52_request_and_selector_normalize_to_glm53(self):
+        response = self.client.post('/api/v1/models/set', headers=self.headers(), json={'model_id': 'glm-5.2'})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()['current'], 'glm-5.3')
+        for endpoint in ('/chat', '/chat/stream'):
+            response = self.client.post('/api/v1' + endpoint, headers=self.headers(),
+                                        json={'message': 'hi', 'model_id': 'glm-5.2'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.calls[-1][1]['model_override'], 'glm-5.3')
+
+    def test_old_doubao_preference_requests_and_catalogue_migrate_to_seed21pro(self):
+        self.prefs.save_user_model('admin', 'auto')
+        path = self.prefs._path('admin')
+        path.write_text('{"model_id":"Doubao-Seed-2.0-pro"}', encoding='utf-8')
+        response = self.client.get('/api/v1/models', headers=self.headers())
+        self.assertEqual(response.json()['current'], 'doubao-seed-2.1-pro')
+        models = {item['id']: item['name'] for item in response.json()['models']}
+        self.assertEqual(models['doubao-seed-2.1-pro'], 'Doubao-Seed-2.1-Pro')
+        self.assertNotIn('Doubao-Seed-2.0-pro', models)
+        for endpoint in ('/chat', '/chat/stream'):
+            response = self.client.post('/api/v1' + endpoint, headers=self.headers(),
+                                       json={'message': 'hi', 'model_id': 'Doubao-Seed-2.0-pro'})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.calls[-1][1]['model_override'], 'doubao-seed-2.1-pro')
 
     def test_http_authentication_and_validation_before_model_call(self):
         self.assertEqual(self.client.get('/api/v1/models').status_code, 401)
@@ -379,6 +536,29 @@ class APITests(IsolatedSource):
 
 
 class CoreSelectionTests(IsolatedSource):
+    def test_multimodal_auto_uses_ark_glm53_flash_not_text_glm53(self):
+        selected = []
+        async def stream(*args):
+            yield SimpleNamespace(content='OK')
+        def create(**kw):
+            selected.append(kw['model_override'])
+            return SimpleNamespace(astream=stream)
+        scope = dict(self.core, AsyncGenerator=AsyncGenerator, create_llm=create,
+                     set_current_agent_id=lambda *a: None, set_current_session_id=lambda *a: None,
+                     _resolve_agent_task=lambda *a: None, get_session_history=lambda *a: SimpleNamespace(messages=[], add_message=lambda *a: None),
+                     MAX_HISTORY_MESSAGES=20, HumanMessage=HumanMessage, SystemMessage=SystemMessage,
+                     AIMessage=AIMessage, _inject_current_date=lambda value: value, SYSTEM_PROMPT='prompt',
+                     _extract_content=lambda chunk: chunk.content)
+        definitions('app/agent/core.py', ['chat_stream_generator_multimodal'], scope)
+        async def run():
+            return [event async for event in scope['chat_stream_generator_multimodal'](
+                [{'type': 'text', 'text': 'describe'}, {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,dGVzdA=='}}],
+                model_override='auto')]
+        events = asyncio.run(run())
+        self.assertEqual(selected, ['glm-5.3-flash'])
+        self.assertEqual([event['content'] for event in events if event['type'] == 'token'], ['OK'])
+        self.assertEqual(events[-1]['type'], 'done')
+
     def test_graph_retry_keeps_selected_model_when_default_changes(self):
         calls = []
         settings = self.cfg.settings
@@ -463,13 +643,13 @@ class CoreSelectionTests(IsolatedSource):
         definitions('app/agent/core.py', ['get_agent_with_prompt'], scope)
         get = scope['get_agent_with_prompt']
         auto = get('prompt', model_override='auto')
-        glm = get('prompt', model_override='glm-5.2')
+        glm = get('prompt', model_override='glm-5.3')
         kimi = get('prompt', model_override='kimi-k3', skill='pfmea-dfmea-skill')
         self.assertIsNot(auto, glm)
         self.assertIsNot(glm, kimi)
         self.cfg.settings.LLM_MODEL = 'qwen3.7-plus'
         self.assertIs(get('prompt', model_override='auto'), auto)
-        self.assertEqual([call['model_override'] for call in calls], ['auto', 'glm-5.2', 'kimi-k3'])
+        self.assertEqual([call['model_override'] for call in calls], ['auto', 'glm-5.3', 'kimi-k3'])
         self.assertTrue(calls[-1]['force_non_streaming'])
 
     def test_every_request_core_client_and_graph_creation_carries_snapshot(self):

@@ -1346,7 +1346,7 @@ async function loadModels() {
         currentModelId = hasCurrent ? data.current : (data.models.some(m => m.id === 'auto') ? 'auto' : data.models[0].id);
         select.value = currentModelId;
         select.title = currentModelId === 'auto'
-            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.2'}`
+            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.3'}`
             : `当前模型：${select.options[select.selectedIndex].textContent}`;
     } catch (e) {
         if (!isCurrent()) return;
@@ -1383,10 +1383,10 @@ async function switchModel() {
         const selectedOption = select.options[select.selectedIndex];
         const name = selectedOption ? selectedOption.textContent : currentModelId;
         select.title = currentModelId === 'auto'
-            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.2'}`
+            ? `Auto：当前实际使用 ${data.effective || 'GLM-5.3'}`
             : `当前模型：${name}`;
         showToast(currentModelId === 'auto'
-            ? `已切换到 Auto，当前使用 ${data.effective || 'GLM-5.2'}`
+            ? `已切换到 Auto，当前使用 ${data.effective || 'GLM-5.3'}`
             : `已切换到模型：${name}`);
     } catch (e) {
         if (!isCurrent()) return;

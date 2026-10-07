@@ -446,12 +446,13 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
                             用于 think() 重试时切换，FMEA skill 大 context 场景必需
         force_backup: 本次尝试使用已完整配置的备用 Key 和接口地址
     """
-    selected_model = model_override or settings.LLM_MODEL
+    from app.config import ARK_BACKUP_MODEL
+    selected_model = ARK_BACKUP_MODEL if force_backup else (model_override or settings.LLM_MODEL)
     model = resolve_model_id(selected_model)
     if selected_model == AUTO_MODEL_ID:
         logger.info(f"Auto 模式：实际使用模型 {model}")
     
-    if fast_mode and not model_override and selected_model != AUTO_MODEL_ID:
+    if fast_mode and not force_backup and not model_override and selected_model != AUTO_MODEL_ID:
         # 从 FAST_MODELS 配置中选取快速模型（如当前模型已是快速模型则不切换）
         if model not in FAST_MODELS and FAST_MODELS:
             fast_model = next(iter(FAST_MODELS))
@@ -475,11 +476,13 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
     is_mimo = model in MIMO_MODELS
     # [Kimi] 检测是否为Kimi模型，使用 Moonshot API
     is_kimi = model in KIMI_MODELS
-    # [GLM] 检测是否为GLM模型，使用阿里云百炼平台（兼容模式代理智谱模型）
+    # 保留旧 GLM 分类兼容；当前 GLM 客户端已统一使用火山。
     is_glm = model in GLM_MODELS
     
     from app.config import get_model_connection
     api_key, base_url = get_model_connection(model, backup=force_backup)
+    if model in VOLCENGINE_MODELS and not api_key:
+        raise RuntimeError('火山模型未配置 API Key，请配置有效的 ARK_API_KEY 或 DEEPSEEK_API_KEY 后重启服务')
     is_official_deepseek = model == "DeepSeek-V4.1-Flash"
     if is_official_deepseek:
         model = settings.DEEPSEEK_V41_MODEL
@@ -2039,7 +2042,8 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
-    current_model = model_override or settings.LLM_MODEL
+    selected_model = model_override or settings.LLM_MODEL
+    current_model = resolve_model_id(selected_model)
     use_model = current_model
     if current_model not in VISION_MODELS:
         use_model = DEFAULT_VISION_MODEL
@@ -2084,7 +2088,7 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
         try:
             text_parts = [p["text"] for p in multimodal_content if p["type"] == "text"]
             fallback_text = "\n".join(text_parts) + "\n\n[注意：图片分析失败，请用文字描述你的问题]"
-            async for event in chat_stream_generator(fallback_text, session_id, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill, model_override=current_model):
+            async for event in chat_stream_generator(fallback_text, session_id, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill, model_override=selected_model):
                 yield event
             return
         except Exception as e2:

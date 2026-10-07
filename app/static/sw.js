@@ -4,15 +4,15 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-v1.1.1-auto-account';
-const STATIC_CACHE = 'jlagent-static-v1.1.1-auto-account';
+const CACHE_NAME = 'jlagent-v1.1.2-ark-glm53';
+const STATIC_CACHE = 'jlagent-static-v1.1.2-ark-glm53';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
     '/',
     '/static/css/style.css',
-    '/static/js/app.js?v=20261007-auto-account1',
+    '/static/js/app.js?v=20261007-ark-glm53-1',
     '/static/manifest.json',
     '/static/icons/icon-gy.svg',
     '/static/icons/icon-192.png',

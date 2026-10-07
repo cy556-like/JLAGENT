@@ -8,28 +8,57 @@
 import os
 import logging
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
 AUTO_MODEL_ID = "auto"
-AUTO_MODEL_TARGET = "glm-5.2"
+AUTO_MODEL_TARGET = "glm-5.3"
+ARK_CHAT_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3"
+ARK_BACKUP_MODEL = "glm-5.3"
+MODEL_ID_ALIASES = {
+    "glm-5.2": "glm-5.3",
+    "glm-4v-plus": "glm-5.3-flash",
+    "glm-4v": "glm-5.3-flash",
+    "glm-4v-flash": "glm-5.3-flash",
+    "Doubao-Seed-2.0-pro": "doubao-seed-2.1-pro",
+    "doubao-seed-2.0-pro": "doubao-seed-2.1-pro",
+    "Doubao-Seed-2.1-pro": "doubao-seed-2.1-pro",
+}
 
 # 显式指定 .env 路径（项目根目录），避免 uvicorn 启动目录不是项目根时找不到 .env
 _env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 if not load_dotenv(_env_path):
     load_dotenv()  # 回退：尝试从 cwd 加载
 
+
+def _legacy_ark_key(key_name, url_name):
+    """Reuse a generic legacy Key only when its URL explicitly identifies Ark Coding Chat."""
+    try:
+        url = urlsplit(os.getenv(url_name, '').strip())
+    except ValueError:
+        return ''
+    if url.scheme == 'https' and url.hostname == 'ark.cn-beijing.volces.com' and url.path.rstrip('/') == '/api/coding/v3':
+        return os.getenv(key_name, '').strip()
+    return ''
+
+
+_ark_key = (os.getenv('ARK_API_KEY', '').strip() or os.getenv('DEEPSEEK_API_KEY', '').strip() or
+            _legacy_ark_key('LLM_API_KEY', 'LLM_BASE_URL'))
+_ark_backup_key = (os.getenv('ARK_API_KEY_BACKUP', '').strip() or
+                   _legacy_ark_key('LLM_API_KEY_BACKUP', 'LLM_BASE_URL_BACKUP') or _ark_key)
+
 # 可用的 LLM 模型列表
 AVAILABLE_MODELS = [
-    # 自动模式（默认）：当前固定指向 GLM-5.2，后续可扩展为按任务路由
-    {"id": AUTO_MODEL_ID, "name": "Auto", "desc": "自动选择模型，当前默认使用 GLM-5.2"},
+    # 自动模式（默认）：当前使用火山引擎 GLM-5.3。
+    {"id": AUTO_MODEL_ID, "name": "Auto", "desc": "自动选择模型，当前默认使用 GLM-5.3（火山引擎）"},
     # DeepSeek 系列（火山引擎）
     {"id": "DeepSeek-V4.1-Flash", "name": "Deepseek-V4.1-Flash", "desc": "DeepSeek V4.1 Flash"},
     # GLM 系列（火山引擎Ark，与豆包/DeepSeek共用套餐）
-    {"id": "glm-5.2", "name": "GLM-5.2", "desc": "GLM旗舰，火山引擎Ark"},
+    {"id": "glm-5.3", "name": "GLM-5.3", "desc": "GLM旗舰，火山引擎Ark"},
     # 豆包系列（火山引擎）
-    {"id": "Doubao-Seed-2.0-pro", "name": "Doubao-Seed-2.0-Pro", "desc": "豆包旗舰，火山引擎"},
+    {"id": "doubao-seed-2.1-pro", "name": "Doubao-Seed-2.1-Pro", "desc": "豆包旗舰，火山引擎"},
     # 千问系列（阿里云）
     {"id": "qwen3.7-plus", "name": "Qwen3.7-Plus", "desc": "千问旗舰，阿里云DashScope"},
     # MiMo系列（小米）
@@ -39,19 +68,19 @@ AVAILABLE_MODELS = [
 ]
 
 # 支持图片分析的视觉模型列表
-VISION_MODELS = {"glm-4v-plus", "glm-4v", "glm-4v-flash"}
+VISION_MODELS = {"glm-5.3-flash"}
 # 默认视觉模型（当用户上传图片时自动切换）
-DEFAULT_VISION_MODEL = "glm-4v-flash"
-# 视觉模型专用 API 配置（智谱AI，无论当前选用什么模型，视觉理解始终走智谱）
-# 如未设置则回退到 LLM_API_KEY / LLM_BASE_URL
-VISION_API_KEY: str = os.getenv("VISION_API_KEY", os.getenv("LLM_API_KEY", ""))
-VISION_BASE_URL: str = os.getenv("VISION_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+DEFAULT_VISION_MODEL = "glm-5.3-flash"
+# GLM-5.3 是文本模型；图片分析与图片 OCR 使用火山 GLM-5.3-Flash。
+# 保留导出名称供 RAG 图片 OCR 使用，不再读取旧智谱视觉配置。
+VISION_API_KEY: str = _ark_key
+VISION_BASE_URL: str = ARK_CHAT_BASE_URL
 
 # 快速模型列表（用于意图路由，加速简单问题的响应）
 FAST_MODELS = {"DeepSeek-V4-Flash"}
 
 # 火山引擎模型列表（走火山引擎Ark Coding API，包括豆包/DeepSeek/GLM）
-VOLCENGINE_MODELS = {"DeepSeek-V4-Flash", "Doubao-Seed-2.0-pro", "glm-5.2"}
+VOLCENGINE_MODELS = {"DeepSeek-V4-Flash", "doubao-seed-2.1-pro", "glm-5.3", "glm-5.3-flash"}
 
 # DeepSeek 模型列表（兼容旧代码引用，走火山引擎Coding API）
 DEEPSEEK_MODELS = {"DeepSeek-V4-Flash"}
@@ -65,7 +94,7 @@ MIMO_MODELS = {"mimo-v2.5-pro"}
 # Kimi模型列表（走 Moonshot API）
 KIMI_MODELS = {"kimi-k3"}
 
-# GLM模型列表（GLM-5.2 已加入 VOLCENGINE_MODELS，走火山引擎Ark；此处仅保留旧版兼容）
+# GLM 已归入火山模型；保留旧版导出兼容。
 GLM_MODELS = set()
 
 
@@ -78,18 +107,20 @@ class Settings:
     # 新默认值为 Auto。兼容旧部署：若 .env 仍保留旧默认 DeepSeek，则自动迁移到 Auto；
     # 用户仍可在前端显式选择 DeepSeek。
     _configured_model = os.getenv("LLM_MODEL", AUTO_MODEL_ID).strip()
+    _configured_model = MODEL_ID_ALIASES.get(_configured_model, _configured_model)
     if _configured_model in ("", "DeepSeek-V4-Flash"):
         _configured_model = AUTO_MODEL_ID
     _valid_model_ids = {model["id"] for model in AVAILABLE_MODELS}
     LLM_MODEL: str = _configured_model if _configured_model in _valid_model_ids else AUTO_MODEL_ID
 
-    # LLM 备用配置（主Key失效时自动切换）
-    LLM_API_KEY_BACKUP: str = os.getenv("LLM_API_KEY_BACKUP", "")
-    LLM_BASE_URL_BACKUP: str = os.getenv("LLM_BASE_URL_BACKUP", "")
+    # 备用服务统一使用火山 GLM-5.3；不把旧智谱 Key 发送给火山。
+    # 可用 ARK_API_KEY_BACKUP 配置另一把有效火山 Key；没有则复用主火山 Key。
+    LLM_API_KEY_BACKUP: str = _ark_backup_key
+    LLM_BASE_URL_BACKUP: str = ARK_CHAT_BASE_URL
 
     # DeepSeek / 豆包 独立配置（火山引擎Ark）
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", os.getenv("LLM_API_KEY", ""))
-    DEEPSEEK_BASE_URL: str = os.getenv("DEEPSEEK_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3")
+    DEEPSEEK_API_KEY: str = _ark_key
+    DEEPSEEK_BASE_URL: str = ARK_CHAT_BASE_URL
     DEEPSEEK_V41_API_KEY: str = os.getenv("DEEPSEEK_V41_API_KEY", "")
     DEEPSEEK_V41_BASE_URL: str = os.getenv("DEEPSEEK_V41_BASE_URL") or "https://api.deepseek.com"
     DEEPSEEK_V41_MODEL: str = os.getenv("DEEPSEEK_V41_MODEL") or "deepseek-flash"
@@ -106,9 +137,9 @@ class Settings:
     MOONSHOT_API_KEY: str = os.getenv("MOONSHOT_API_KEY", "")
     MOONSHOT_BASE_URL: str = os.getenv("MOONSHOT_BASE_URL", "https://api.moonshot.cn/v1")
 
-    # GLM独立配置（阿里云百炼平台，走 LLM_API_KEY/LLM_BASE_URL）
-    GLM_API_KEY: str = os.getenv("GLM_API_KEY", os.getenv("LLM_API_KEY", ""))
-    GLM_BASE_URL: str = os.getenv("GLM_BASE_URL", os.getenv("LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"))
+    # 旧导出兼容；GLM 的 API 服务统一为火山，不读取旧智谱配置。
+    GLM_API_KEY: str = _ark_key
+    GLM_BASE_URL: str = ARK_CHAT_BASE_URL
 
     # Embedding 模型
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "embedding-3")
@@ -150,6 +181,7 @@ settings = Settings()
 
 def resolve_model_id(model_id: str, now: datetime | None = None) -> str:
     """将前端选择值解析为实际调用的模型ID。"""
+    model_id = MODEL_ID_ALIASES.get(model_id, model_id)
     model_id = AUTO_MODEL_TARGET if model_id == AUTO_MODEL_ID else model_id
     if model_id == "DeepSeek-V4.1-Flash":
         china = timezone(timedelta(hours=8))
@@ -162,7 +194,7 @@ def resolve_model_id(model_id: str, now: datetime | None = None) -> str:
 
 
 def get_effective_model() -> str:
-    """获取当前实际调用的模型ID（Auto 当前解析为 GLM-5.2）。"""
+    """获取当前实际调用的模型ID（Auto 当前解析为火山 GLM-5.3）。"""
     return resolve_model_id(settings.LLM_MODEL)
 
 
@@ -172,9 +204,10 @@ def get_model_connection(model: str, *, backup: bool = False) -> tuple[str, str]
         if not settings.LLM_API_KEY_BACKUP or not settings.LLM_BASE_URL_BACKUP:
             raise ValueError('备用服务需要同时配置 API Key 和接口地址')
         return settings.LLM_API_KEY_BACKUP, settings.LLM_BASE_URL_BACKUP
+    model = MODEL_ID_ALIASES.get(model, model)
     if model == 'DeepSeek-V4.1-Flash':
         return settings.DEEPSEEK_V41_API_KEY, settings.DEEPSEEK_V41_BASE_URL
-    if model in VOLCENGINE_MODELS and settings.DEEPSEEK_API_KEY:
+    if model in VOLCENGINE_MODELS:
         return settings.DEEPSEEK_API_KEY, settings.DEEPSEEK_BASE_URL
     if model in QWEN_MODELS and settings.QWEN_API_KEY:
         return settings.QWEN_API_KEY, settings.QWEN_BASE_URL
@@ -193,6 +226,7 @@ def get_model_connection(model: str, *, backup: bool = False) -> tuple[str, str]
 
 def set_current_model(model_id: str) -> bool:
     """动态切换当前使用的模型"""
+    model_id = MODEL_ID_ALIASES.get(model_id, model_id)
     valid_ids = [m["id"] for m in AVAILABLE_MODELS]
     if model_id in valid_ids:
         old = settings.LLM_MODEL

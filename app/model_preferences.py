@@ -7,12 +7,14 @@ import os
 from pathlib import Path
 import tempfile
 import time
-from app.config import settings, AVAILABLE_MODELS
+from app.config import settings, AVAILABLE_MODELS, MODEL_ID_ALIASES
 
 logger = logging.getLogger(__name__)
 
 
 def validate_model_id(model_id):
+    if isinstance(model_id, str):
+        model_id = MODEL_ID_ALIASES.get(model_id, model_id)
     if not isinstance(model_id, str) or model_id not in {item['id'] for item in AVAILABLE_MODELS}:
         raise ValueError('不支持的模型选择')
     return model_id

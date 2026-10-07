@@ -1,7 +1,7 @@
 """Resolve the schedule at invocation time; retry only the failed model call."""
 import logging
 
-from app.config import settings, resolve_model_id, VISION_MODELS, get_model_connection
+from app.config import settings, resolve_model_id, VISION_MODELS, get_model_connection, ARK_BACKUP_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +34,12 @@ class RoutedLLM:
         if primary in VISION_MODELS:
             return [primary]
         order = [primary, 'DeepSeek-V4-Flash', 'qwen3.7-plus',
-                 'mimo-v2.5-pro', 'glm-5.2', 'Doubao-Seed-2.0-pro']
+                 'mimo-v2.5-pro', 'glm-5.3', 'doubao-seed-2.1-pro']
         keys = {
             'DeepSeek-V4.1-Flash': settings.DEEPSEEK_V41_API_KEY,
             'DeepSeek-V4-Flash': settings.DEEPSEEK_API_KEY,
-            'glm-5.2': settings.DEEPSEEK_API_KEY,
-            'Doubao-Seed-2.0-pro': settings.DEEPSEEK_API_KEY,
+            'glm-5.3': settings.DEEPSEEK_API_KEY,
+            'doubao-seed-2.1-pro': settings.DEEPSEEK_API_KEY,
             'qwen3.7-plus': settings.QWEN_API_KEY,
             'mimo-v2.5-pro': settings.MIMO_API_KEY,
         }
@@ -53,14 +53,18 @@ class RoutedLLM:
         models = self.candidates()
         targets = [(model, False) for model in models]
         primary = models[0]
-        # Keep successful calls unchanged. Only after configured model fallbacks
-        # fail, try a distinct, fully configured compatible backup service.
+        # Ark backup must use an Ark-supported model, not the selected provider's ID.
+        # Avoid retrying a model/Key/URL already included in normal candidates.
         if primary not in VISION_MODELS and settings.LLM_API_KEY_BACKUP and settings.LLM_BASE_URL_BACKUP:
-            normal = get_model_connection(primary)
-            backup = get_model_connection(primary, backup=True)
-            if (normal[0], normal[1].rstrip('/')) != (backup[0], backup[1].rstrip('/')):
-                targets.append((primary, True))
+            backup = (ARK_BACKUP_MODEL, *self.credentials(ARK_BACKUP_MODEL, True))
+            normal = {(model, *self.credentials(model)) for model in models}
+            if backup not in normal:
+                targets.append((ARK_BACKUP_MODEL, True))
         return targets
+
+    def credentials(self, model, backup=False):
+        key, url = get_model_connection(model, backup=backup)
+        return key, url.rstrip('/')
 
     def client(self, model, backup=False):
         options = {**self.options, **({'force_backup': True} if backup else {})}
@@ -70,29 +74,45 @@ class RoutedLLM:
         return client
 
     def invoke(self, messages, **kwargs):
+        failed_auth = set()
         for model, backup in self.targets():
+            credentials = self.credentials(model, backup)
+            if credentials in failed_auth:
+                continue
             try:
                 return self.client(model, backup).invoke(messages, **kwargs)
             except Exception as error:
                 if not capacity_error(error):
                     raise
+                if authentication_error(error):
+                    failed_auth.add(credentials)
                 last_error = error
                 logger.warning('Configured model authentication/capacity failed: model=%s backup=%s', model, backup)
         raise last_error
 
     async def ainvoke(self, messages, **kwargs):
+        failed_auth = set()
         for model, backup in self.targets():
+            credentials = self.credentials(model, backup)
+            if credentials in failed_auth:
+                continue
             try:
                 return await self.client(model, backup).ainvoke(messages, **kwargs)
             except Exception as error:
                 if not capacity_error(error):
                     raise
+                if authentication_error(error):
+                    failed_auth.add(credentials)
                 last_error = error
                 logger.warning('Configured model authentication/capacity failed: model=%s backup=%s', model, backup)
         raise last_error
 
     async def astream(self, messages, **kwargs):
+        failed_auth = set()
         for model, backup in self.targets():
+            credentials = self.credentials(model, backup)
+            if credentials in failed_auth:
+                continue
             emitted = False
             try:
                 async for chunk in self.client(model, backup).astream(messages, **kwargs):
@@ -103,6 +123,8 @@ class RoutedLLM:
                 # Never concatenate a new answer onto a partially delivered answer.
                 if emitted or not capacity_error(error):
                     raise
+                if authentication_error(error):
+                    failed_auth.add(credentials)
                 last_error = error
                 logger.warning('Configured model authentication/capacity failed: model=%s backup=%s', model, backup)
         raise last_error
