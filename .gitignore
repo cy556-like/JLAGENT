@@ -14,6 +14,7 @@ data/embeddings/
 data/export/
 data/conversations/
 data/users/
+data/model_preferences/
 data/stats.json
 tmp/
 .idea/

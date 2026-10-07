@@ -416,7 +416,7 @@ class AgentState(TypedDict):
     retry_count: int
 
 # ===== 2. 创建 LLM =====
-# 主Key是否已确认失效（运行时标记，避免每次都重试失败的Key）
+# 保留旧管理接口的 reset_primary_key 兼容状态；不再参与请求路由。
 _primary_key_failed = False
 _primary_key_lock = threading.Lock()  # [BUG FIX] 并发安全
 
@@ -427,8 +427,9 @@ _llm_cache = {}  # cache_key -> {"instance": ChatOpenAI, "created_at": float}
 _LLM_CACHE_TTL = 900  # 15分钟，短于代理/服务端典型空闲超时（60-120s）
 
 def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_override: str = None, 
-               short_response: bool = False, skill_mode: bool = False, force_non_streaming: bool = False):
-    """创建 LLM 实例（启用 streaming 支持，支持备用Key自动切换）
+               short_response: bool = False, skill_mode: bool = False, force_non_streaming: bool = False,
+               force_backup: bool = False):
+    """创建 LLM 实例；备用服务由路由器明确指定，不使用跨用户失败标记。
     
     [优化1] 使用缓存：按 (model, api_key, base_url, temperature) 作为缓存 key，
     相同参数复用同一个 ChatOpenAI 实例，避免每次请求重建 HTTP 连接（TCP + TLS 握手）。
@@ -443,8 +444,8 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
                     reasoning_effort 以避免 Moonshot 流式响应被服务端中断）
         force_non_streaming: 强制使用非流式 HTTP 请求（绕过 Moonshot 流式响应中断）
                             用于 think() 重试时切换，FMEA skill 大 context 场景必需
+        force_backup: 本次尝试使用已完整配置的备用 Key 和接口地址
     """
-    global _primary_key_failed
     selected_model = model_override or settings.LLM_MODEL
     model = resolve_model_id(selected_model)
     if selected_model == AUTO_MODEL_ID:
@@ -461,9 +462,8 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
     # deep_think 不再切换模型：用户已主动选择模型，深度思考只需调整 temperature 和 max_tokens
     # 旧代码会强制切换到已失效的 glm-4-plus 等模型，导致 API 调用失败
 
-    # 决定使用主Key还是备用Key（用锁保护并发读写）
-    with _primary_key_lock:
-        use_backup = _primary_key_failed and bool(settings.LLM_API_KEY_BACKUP)
+    # Backup is an explicit attempt, never a shared flag affecting other users.
+    use_backup = force_backup
     
     # [DeepSeek] 检测是否为 DeepSeek 模型，自动切换火山引擎 API
     is_deepseek = model in DEEPSEEK_MODELS
@@ -478,41 +478,12 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
     # [GLM] 检测是否为GLM模型，使用阿里云百炼平台（兼容模式代理智谱模型）
     is_glm = model in GLM_MODELS
     
+    from app.config import get_model_connection
+    api_key, base_url = get_model_connection(model, backup=force_backup)
     is_official_deepseek = model == "DeepSeek-V4.1-Flash"
     if is_official_deepseek:
-        api_key = settings.DEEPSEEK_V41_API_KEY
-        base_url = settings.DEEPSEEK_V41_BASE_URL
         model = settings.DEEPSEEK_V41_MODEL
-    elif is_volcengine and settings.DEEPSEEK_API_KEY:
-        api_key = settings.DEEPSEEK_API_KEY
-        base_url = settings.DEEPSEEK_BASE_URL
-        logger.info(f"火山引擎模型检测到（{model}），使用火山引擎 Coding API: {base_url}")
-    elif is_qwen and settings.QWEN_API_KEY:
-        api_key = settings.QWEN_API_KEY
-        base_url = settings.QWEN_BASE_URL
-        logger.info(f"千问模型检测到（{model}），使用阿里云 DashScope API: {base_url}")
-    elif is_mimo and settings.MIMO_API_KEY:
-        api_key = settings.MIMO_API_KEY
-        base_url = settings.MIMO_BASE_URL
-        logger.info(f"MiMo模型检测到（{model}），使用小米MiMo API: {base_url}")
-    elif is_kimi:
-        if not settings.MOONSHOT_API_KEY:
-            raise RuntimeError("Kimi K3 未配置 MOONSHOT_API_KEY，请在服务器 .env 中配置后重启服务")
-        api_key = settings.MOONSHOT_API_KEY
-        base_url = settings.MOONSHOT_BASE_URL
-        logger.info(f"Kimi模型检测到（{model}），使用 Moonshot API: {base_url}")
-    elif is_glm and settings.GLM_API_KEY:
-        api_key = settings.GLM_API_KEY
-        base_url = settings.GLM_BASE_URL
-        logger.info(f"GLM模型检测到（{model}），使用火山引擎Ark: {base_url}")
-    # [视觉模型] 无论当前选什么模型，视觉理解始终走智谱AI专用配置
-    elif model in VISION_MODELS:
-        api_key = VISION_API_KEY
-        base_url = VISION_BASE_URL
-        logger.info(f"视觉模型检测到（{model}），使用智谱AI视觉专用API: {base_url}")
-    else:
-        api_key = settings.LLM_API_KEY_BACKUP if use_backup else settings.LLM_API_KEY
-        base_url = settings.LLM_BASE_URL_BACKUP if use_backup else settings.LLM_BASE_URL
+    logger.info('模型请求配置: model=%s endpoint=%s backup=%s', model, base_url, force_backup)
     # [BUG FIX v10] Kimi K3 temperature 处理：
     # - 不显式传 temperature（让 Moonshot 服务端根据 reasoning_effort 自动选择）
     # - 参考：hermes-agent #13157 "omit temperature entirely for Kimi/Moonshot models"
@@ -580,7 +551,7 @@ def _create_llm_client(deep_think: bool = False, fast_mode: bool = False, model_
             del _llm_cache[cache_key]
 
     if use_backup:
-        logger.info(f"使用备用API Key（主Key已失效）: {base_url}")
+        logger.info(f"使用配置的备用API服务: {base_url}")
     else:
         logger.info(f"使用主API Key: {base_url}")
 
@@ -748,19 +719,10 @@ def _sanitize_tools_for_moonshot(tools, is_kimi: bool):
     
     return sanitized
 
-def _check_and_switch_to_backup(error_exception):
-    """检测到401错误时，自动切换到备用Key"""
-    if settings.LLM_MODEL in {"DeepSeek-V4.1-Flash", "DeepSeek-V4-Flash"}:
-        return False  # Independent providers are retried by RoutedLLM, not the global key switch.
-    global _primary_key_failed
-    error_str = str(error_exception).lower()
-    if ("401" in error_str or "authentication" in error_str or "令牌" in error_str) and settings.LLM_API_KEY_BACKUP:
-        with _primary_key_lock:
-            if not _primary_key_failed:
-                _primary_key_failed = True
-                logger.warning(f"⚠️ 主API Key认证失败(401)，已自动切换到备用Key: {settings.LLM_BASE_URL_BACKUP}")
-        return True
-    return False
+def _is_model_auth_error(error_exception):
+    """Recognize provider authentication failures, not arbitrary token wording."""
+    from app.agent.model_routing import authentication_error
+    return authentication_error(error_exception)
 
 def reset_primary_key():
     """重置主Key状态（更换Key后调用）"""
@@ -1123,6 +1085,7 @@ def get_agent_with_prompt(
     web_search: bool = False,
     skill_mode: bool = False,
     skill: str = None,
+    model_override: str = None,
 ):
     """获取带有自定义系统提示词的 Agent 实例
     
@@ -1132,15 +1095,16 @@ def get_agent_with_prompt(
     """
     # 生成缓存 key
     prompt_hash = hashlib.md5(custom_system_prompt.encode()).hexdigest()[:16]
-    resolved_model = resolve_model_id(settings.LLM_MODEL)
-    cache_key = f"{prompt_hash}:{web_search}:{skill_mode}:{skill or ''}:{resolved_model}"
+    selected_model = model_override or settings.LLM_MODEL
+    resolved_model = resolve_model_id(selected_model)
+    cache_key = f"{prompt_hash}:{web_search}:{skill_mode}:{skill or ''}:{selected_model}:{resolved_model}"
     
     if cache_key in _agent_prompt_graph_cache:
         logger.debug(f"Agent Graph 缓存命中: prompt_hash={prompt_hash}, web_search={web_search}")
         _agent_prompt_graph_timestamps[cache_key] = time.time()  # [性能修复] 更新访问时间
         return _agent_prompt_graph_cache[cache_key]
     
-    _is_kimi_for_sanitize = settings.LLM_MODEL in KIMI_MODELS or resolved_model in KIMI_MODELS
+    _is_kimi_for_sanitize = selected_model in KIMI_MODELS or resolved_model in KIMI_MODELS
     # FMEA 是唯一已确认会稳定触发 Kimi 长响应中断的 Skill。
     # 直接从首轮使用非流式请求，并由 SSE 心跳维持浏览器连接；
     # 8D 和所有非 Kimi 模型仍保持原来的流式行为。
@@ -1148,6 +1112,7 @@ def get_agent_with_prompt(
         _is_kimi_for_sanitize and skill == "pfmea-dfmea-skill"
     )
     llm = create_llm(
+        model_override=selected_model,
         skill_mode=skill_mode,
         force_non_streaming=force_fmea_non_streaming,
     )
@@ -1270,6 +1235,7 @@ def get_agent_with_prompt(
                         f"重建 LLM 实例（{', '.join(rebuild_reason) or '默认参数'}）"
                     )
                     new_llm = create_llm(
+                        model_override=selected_model,
                         skill_mode=skill_mode,
                         force_non_streaming=force_non_streaming,
                         short_response=use_short_response,
@@ -1334,12 +1300,13 @@ def get_agent_with_prompt(
     
     return compiled
 
-def chat(user_input: str, session_id: str = "default", web_search: bool = False, mode: str = "agent", deep_think: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None) -> str:
+def chat(user_input: str, session_id: str = "default", web_search: bool = False, mode: str = "agent", deep_think: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None, model_override: str = None) -> str:
     """非流式对话（保留兼容）"""
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     reset_search_count()  # 每轮新对话重置搜索计数
     resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
+    selected_model = model_override or settings.LLM_MODEL
     
     if resolved_agent_task:
         custom_prompt = _inject_current_date(_build_agent_prompt(resolved_agent_task, web_search=web_search, agent_id=agent_id))
@@ -1355,7 +1322,7 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
             custom_prompt = custom_prompt + skill_ctx
     
     if mode == "chat":
-        llm = create_llm(deep_think=deep_think)
+        llm = create_llm(deep_think=deep_think, model_override=selected_model)
         history = get_session_history(session_id)
         recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
         all_messages = recent_messages + [HumanMessage(content=user_input)]
@@ -1368,6 +1335,7 @@ def chat(user_input: str, session_id: str = "default", web_search: bool = False,
 
     agent = get_agent_with_prompt(
         custom_prompt,
+        model_override=selected_model,
         web_search=web_search,
         skill_mode=bool(skill),
         skill=skill,
@@ -1702,7 +1670,7 @@ async def _kimi_8d_skill_stream(
 # 超过此时间强制结束，避免 LLM API 挂起导致服务器无响应需 Ctrl+C
 AGENT_STREAM_TIMEOUT = 180  # 3分钟
 
-async def chat_stream_generator(user_input: str, session_id: str = "default", web_search: bool = False, mode: str = "agent", deep_think: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None) -> AsyncGenerator[dict, None]:
+async def chat_stream_generator(user_input: str, session_id: str = "default", web_search: bool = False, mode: str = "agent", deep_think: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None, model_override: str = None) -> AsyncGenerator[dict, None]:
     """流式对话：逐token输出，同时显示工具调用进度
     
     性能优化：
@@ -1727,7 +1695,8 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
     # [BUG FIX v16] Kimi K3 + 8D 使用官方原生 JSON Agent 管线。
     # 完整加载 SKILL.md、匹配模板和 references，并检索当前智能体知识库；
     # 仅绕开会把 Moonshot 400 包装成 Connection error 的 LangChain tool_calls 层。
-    resolved_model = resolve_model_id(settings.LLM_MODEL)
+    selected_model = model_override or settings.LLM_MODEL
+    resolved_model = resolve_model_id(selected_model)
     if skill == "8d-skill" and resolved_model in KIMI_MODELS:
         async for chunk in _kimi_8d_skill_stream(
             user_input,
@@ -1746,7 +1715,7 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         mode = "chat"
     
     if mode == "chat":
-        async for chunk in _chat_mode_stream(user_input, session_id, deep_think=deep_think, web_search=web_search, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill):
+        async for chunk in _chat_mode_stream(user_input, session_id, deep_think=deep_think, web_search=web_search, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill, model_override=selected_model):
             yield chunk
         _cleanup_session_cancel(session_id)  # [v6] 正常结束清理
         return
@@ -1763,6 +1732,7 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
             custom_system_prompt = custom_system_prompt + skill_ctx
     agent = get_agent_with_prompt(
         custom_system_prompt,
+        model_override=selected_model,
         web_search=web_search,
         skill_mode=bool(skill),
         skill=skill,
@@ -1873,10 +1843,10 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
         for tool_name, display_name in pending_tools.items():
             yield {"type": "tool_done", "name": tool_name, "display": display_name}
         pending_tools.clear()
-        # 检测401认证错误，自动切换备用Key
-        if _check_and_switch_to_backup(e):
+        # 路由器已完成配置内的认证/额度兜底；仍失败时不谎报切换成功。
+        if _is_model_auth_error(e):
             _set_session_cancelled(session_id)  # 401 才真正标记取消
-            yield {"type": "error", "content": "主API Key已失效，已自动切换到备用Key，请重新提问"}
+            yield {"type": "error", "content": "模型服务认证失败，请检查服务端对应的 API Key 和接口地址。"}
             yield {"type": "done"}
             _cleanup_session_cancel(session_id)
             return
@@ -1945,12 +1915,12 @@ async def chat_stream_generator(user_input: str, session_id: str = "default", we
 
     elapsed = time.time() - start_time
     tool_rounds = sum(1 for m in all_messages if isinstance(m, ToolMessage))
-    logger.info(f"Agent 对话完成 | 耗时={elapsed:.2f}s | 模型={settings.LLM_MODEL} | 工具轮数={tool_rounds}")
+    logger.info(f"Agent 对话完成 | 耗时={elapsed:.2f}s | 所选模型={selected_model} | 工具轮数={tool_rounds}")
 
     yield {"type": "done"}
     _cleanup_session_cancel(session_id)  # [v6] 正常结束清理
 
-async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_think: bool = False, web_search: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None) -> AsyncGenerator[dict, None]:
+async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_think: bool = False, web_search: bool = False, agent_id: str = None, agent_task: str = None, skill: str = None, model_override: str = None) -> AsyncGenerator[dict, None]:
     """Chat模式：直接LLM流式对话，不经过Agent工具调用，可选联网搜索
     
     性能优化：Chat模式跳过了Agent的 Think→Act→Observe 循环，
@@ -1959,6 +1929,7 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
+    selected_model = model_override or settings.LLM_MODEL
     chat_system_prompt = _inject_current_date(_build_chat_prompt(resolved_agent_task, agent_id=agent_id) if resolved_agent_task else CHAT_SYSTEM_PROMPT)
     # [方案B] 8D/FMEA skill 注入
     if skill:
@@ -1972,9 +1943,9 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
     # 避免流式响应被 Moonshot 服务端中断
     if skill and not is_simple:
         # skill 模式禁用 short_response 以保留足够 max_tokens 输出长报告
-        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=True)
+        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=True, model_override=selected_model)
     else:
-        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=is_simple, skill_mode=bool(skill))
+        llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=is_simple, skill_mode=bool(skill), model_override=selected_model)
     history = get_session_history(session_id)
     recent_messages = history.messages[-MAX_HISTORY_MESSAGES:]
     
@@ -2030,9 +2001,9 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
                 "remotedisconnected",
                 "chunked encoding",
             ])
-            # 检测401认证错误，自动切换备用Key
-            if _check_and_switch_to_backup(e):
-                yield {"type": "error", "content": "主API Key已失效，已自动切换到备用Key，请重新提问"}
+            # 路由器已完成配置内的认证/额度兜底；仍失败时准确报告认证错误。
+            if _is_model_auth_error(e):
+                yield {"type": "error", "content": "模型服务认证失败，请检查服务端对应的 API Key 和接口地址。"}
                 return
             if retryable and retry_count < max_retry:
                 retry_count += 1
@@ -2040,7 +2011,7 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
                 # [BUG FIX v11] 重建 LLM 实例时切换非流式（绕过 Moonshot 流式中断）
                 try:
                     logger.info(f"_chat_mode_stream 第 {retry_count}/{max_retry} 次重试，切换 streaming=False")
-                    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=bool(skill), force_non_streaming=True)
+                    llm = create_llm(deep_think=deep_think, fast_mode=False, short_response=False, skill_mode=bool(skill), force_non_streaming=True, model_override=selected_model)
                 except Exception as rebuild_e:
                     logger.error(f"_chat_mode_stream 重建 LLM 失败: {rebuild_e}", exc_info=True)
                     yield {"type": "error", "content": f"处理失败: {str(e)}"}
@@ -2063,12 +2034,12 @@ async def _chat_mode_stream(user_input: str, session_id: str = "default", deep_t
 
     yield {"type": "done"}
 
-async def chat_stream_generator_multimodal(multimodal_content: list, session_id: str = "default", agent_id: str = None, agent_task: str = None, skill: str = None) -> AsyncGenerator[dict, None]:
+async def chat_stream_generator_multimodal(multimodal_content: list, session_id: str = "default", agent_id: str = None, agent_task: str = None, skill: str = None, model_override: str = None) -> AsyncGenerator[dict, None]:
     """多模态流式对话：支持图片+文本的混合消息"""
     set_current_agent_id(agent_id)
     set_current_session_id(session_id)
     resolved_agent_task = _resolve_agent_task(agent_task, agent_id)
-    current_model = settings.LLM_MODEL
+    current_model = model_override or settings.LLM_MODEL
     use_model = current_model
     if current_model not in VISION_MODELS:
         use_model = DEFAULT_VISION_MODEL
@@ -2113,7 +2084,7 @@ async def chat_stream_generator_multimodal(multimodal_content: list, session_id:
         try:
             text_parts = [p["text"] for p in multimodal_content if p["type"] == "text"]
             fallback_text = "\n".join(text_parts) + "\n\n[注意：图片分析失败，请用文字描述你的问题]"
-            async for event in chat_stream_generator(fallback_text, session_id, agent_id=agent_id, agent_task=resolved_agent_task):
+            async for event in chat_stream_generator(fallback_text, session_id, agent_id=agent_id, agent_task=resolved_agent_task, skill=skill, model_override=current_model):
                 yield event
             return
         except Exception as e2:

@@ -1317,15 +1317,24 @@ function copyCodeBlock(codeId, btn) {
 // ===== Model Management =====
 let currentModelId = 'auto';
 let modelSwitchInProgress = false;
+let modelRequestVersion = 0;
 
 async function loadModels() {
     const select = document.getElementById('modelSelect');
     if (!select) return;
+    const version = ++modelRequestVersion;
+    const account = currentUser, token = authToken;
+    const isCurrent = () => version === modelRequestVersion && account === currentUser && token === authToken;
+    modelSwitchInProgress = false;
+    currentModelId = 'auto';
+    select.innerHTML = '<option value="auto">Auto</option>';
+    select.value = 'auto';
     try {
         select.disabled = true;
         const resp = await fetch('/api/v1/models', { headers: apiHeaders() });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
+        if (!isCurrent()) return;
         if (!Array.isArray(data.models) || data.models.length === 0) throw new Error('模型列表为空');
         select.innerHTML = '';
         data.models.forEach(m => {
@@ -1340,13 +1349,14 @@ async function loadModels() {
             ? `Auto：当前实际使用 ${data.effective || 'GLM-5.2'}`
             : `当前模型：${select.options[select.selectedIndex].textContent}`;
     } catch (e) {
+        if (!isCurrent()) return;
         console.error('加载模型列表失败', e);
         select.innerHTML = '<option value="auto">Auto（加载失败）</option>';
         select.value = 'auto';
         currentModelId = 'auto';
         showToast('模型列表加载失败，请稍后重试');
     } finally {
-        select.disabled = false;
+        if (isCurrent()) select.disabled = false;
     }
 }
 
@@ -1356,12 +1366,16 @@ async function switchModel() {
     const modelId = select.value;
     const previousModelId = currentModelId;
     if (modelId === previousModelId) return;
+    const version = ++modelRequestVersion;
+    const account = currentUser, token = authToken;
+    const isCurrent = () => version === modelRequestVersion && account === currentUser && token === authToken;
 
     modelSwitchInProgress = true;
     select.disabled = true;
     try {
         const resp = await fetch('/api/v1/models/set', { method: 'POST', headers: apiHeaders(), body: JSON.stringify({ model_id: modelId }) });
         const data = await resp.json();
+        if (!isCurrent()) return;
         if (!resp.ok || !data.success) throw new Error(data.message || `HTTP ${resp.status}`);
 
         currentModelId = data.current || modelId;
@@ -1375,12 +1389,15 @@ async function switchModel() {
             ? `已切换到 Auto，当前使用 ${data.effective || 'GLM-5.2'}`
             : `已切换到模型：${name}`);
     } catch (e) {
+        if (!isCurrent()) return;
         console.error('切换模型失败', e);
         select.value = previousModelId;
         showToast('模型切换失败，已恢复原模型');
     } finally {
-        modelSwitchInProgress = false;
-        select.disabled = false;
+        if (isCurrent()) {
+            modelSwitchInProgress = false;
+            select.disabled = false;
+        }
     }
 }
 
@@ -2674,6 +2691,7 @@ async function downloadExportFile(url) {
 // ===== Send Message =====
 async function sendMessage() {
     if (isLoading) return;
+    const requestModelId = currentModelId;
     // [BUG FIX #1] 竞态条件修复：在 createNewChat() 之前就设置 isLoading
     // 防止快速双击/连按回车时，第二次调用在 await createNewChat() 期间
     // 仍通过 isLoading 检查（此时仍为 false），导致创建重复聊天会话
@@ -2706,6 +2724,7 @@ async function sendMessage() {
         formData.append('file', selectedFile);
         formData.append('message', message);
         formData.append('session_id', currentChatId);
+        formData.append('model_id', requestModelId);
         formData.append('web_search', webSearchEnabled);
         formData.append('mode', currentMode);
         formData.append('deep_think', deepThinkEnabled);
@@ -2731,6 +2750,7 @@ async function sendMessage() {
         formData.append('file', selectedFile);
         formData.append('message', '请分析这个文件的内容');
         formData.append('session_id', currentChatId);
+        formData.append('model_id', requestModelId);
         formData.append('web_search', webSearchEnabled);
         formData.append('mode', currentMode);
 formData.append('skill', selectedSkill || '');
@@ -2752,7 +2772,7 @@ formData.append('skill', selectedSkill || '');
         await streamChat('/api/v1/chat/stream', {
             method: 'POST',
             headers: apiHeaders(),
-            body: JSON.stringify({ message, session_id: currentChatId, web_search: webSearchEnabled, mode: currentMode, deep_think: deepThinkEnabled, skill: selectedSkill || '', agent_id: currentAgentId || '', agent_task: (currentAgentId && myAgents.find(a => a.id === currentAgentId)) ? myAgents.find(a => a.id === currentAgentId).task : '' })
+            body: JSON.stringify({ message, model_id: requestModelId, session_id: currentChatId, web_search: webSearchEnabled, mode: currentMode, deep_think: deepThinkEnabled, skill: selectedSkill || '', agent_id: currentAgentId || '', agent_task: (currentAgentId && myAgents.find(a => a.id === currentAgentId)) ? myAgents.find(a => a.id === currentAgentId).task : '' })
         }, bubble);
         await loadChatList();
     }
@@ -2846,7 +2866,7 @@ async function regenerateMessage(btn) {
     await streamChat('/api/v1/chat/stream', {
         method: 'POST',
         headers: apiHeaders(),
-        body: JSON.stringify({ message: userText, session_id: currentChatId, web_search: webSearchEnabled, mode: currentMode, deep_think: deepThinkEnabled,
+        body: JSON.stringify({ message: userText, model_id: currentModelId, session_id: currentChatId, web_search: webSearchEnabled, mode: currentMode, deep_think: deepThinkEnabled,
         skill: selectedSkill || '', agent_id: currentAgentId || '', agent_task: (currentAgentId && myAgents.find(a => a.id === currentAgentId)) ? myAgents.find(a => a.id === currentAgentId).task : '' })
     }, bubble);
     } finally {

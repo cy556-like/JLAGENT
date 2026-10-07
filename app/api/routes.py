@@ -172,7 +172,8 @@ from app.memory.manager import (
 
 )
 
-from app.config import settings, AVAILABLE_MODELS, get_current_model, get_effective_model, set_current_model
+from app.config import settings, AVAILABLE_MODELS, resolve_model_id
+from app.model_preferences import load_user_model, save_user_model, validate_model_id
 
 from app.utils.stats import record_message, record_session, get_stats
 
@@ -417,6 +418,16 @@ class ChatRequest(BaseModel):
 
     agent_task: str = None  # 智能体任务描述，用于动态系统提示词
     skill: str = None  # [方案B] 前端选择的技能ID（如 8d-skill），用于注入 SKILL.md + 模板
+    model_id: str | None = None
+
+
+async def _request_model_id(model_id, username):
+    if model_id is None:
+        return await asyncio.to_thread(load_user_model, username)
+    try:
+        return validate_model_id(model_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 
@@ -791,6 +802,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(require_auth)):
 
     is_error = False
     ensure_chat_ownership(username, req.session_id)
+    selected_model = await _request_model_id(req.model_id, username)
 
     try:
 
@@ -798,7 +810,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(require_auth)):
 
         # 必须用 asyncio.to_thread 放到线程池，否则阻塞整个事件循环导致所有请求卡死
 
-        response = await asyncio.to_thread(chat, req.message, req.session_id, web_search=req.web_search, mode=req.mode, deep_think=req.deep_think, agent_id=req.agent_id, agent_task=req.agent_task, skill=req.skill)
+        response = await asyncio.to_thread(chat, req.message, req.session_id, web_search=req.web_search, mode=req.mode, deep_think=req.deep_think, agent_id=req.agent_id, agent_task=req.agent_task, skill=req.skill, model_override=selected_model)
 
         # 更新会话时间
 
@@ -811,7 +823,7 @@ async def chat_api(req: ChatRequest, username: str = Depends(require_auth)):
 
         # 记录统计
 
-        record_message(username=username or "anonymous", model_id=get_current_model())
+        record_message(username=username or "anonymous", model_id=selected_model)
 
         return ChatResponse(response=response, session_id=req.session_id)
 
@@ -853,14 +865,15 @@ async def chat_stream_api(req: ChatRequest, request: Request, username: str = De
 
     start = time.time()
     ensure_chat_ownership(username, req.session_id)
+    selected_model = await _request_model_id(req.model_id, username)
 
     # 记录统计
 
-    record_message(username=username or "anonymous", model_id=get_current_model())
+    record_message(username=username or "anonymous", model_id=selected_model)
 
 
 
-    generator_factory = lambda: chat_stream_generator(req.message, req.session_id, web_search=req.web_search, mode=req.mode, deep_think=req.deep_think, agent_id=req.agent_id, agent_task=req.agent_task, skill=req.skill)
+    generator_factory = lambda: chat_stream_generator(req.message, req.session_id, web_search=req.web_search, mode=req.mode, deep_think=req.deep_think, agent_id=req.agent_id, agent_task=req.agent_task, skill=req.skill, model_override=selected_model)
 
 
 
@@ -919,6 +932,8 @@ async def chat_with_file_stream(
 
     store_to_kb: str = Form("true"),
 
+    model_id: str | None = Form(None),
+
     username: str = Depends(require_auth),
 
 ):
@@ -939,12 +954,13 @@ async def chat_with_file_stream(
 
     start = time.time()
     ensure_chat_ownership(username, session_id)
+    selected_model = await _request_model_id(model_id, username)
     if store_to_kb == "true" and agent_id:
         ensure_kb_upload_permission(username, agent_id)
 
     # 记录统计
 
-    record_message(username=username or "anonymous", model_id=get_current_model())
+    record_message(username=username or "anonymous", model_id=selected_model)
 
 
 
@@ -1010,7 +1026,7 @@ async def chat_with_file_stream(
 
             _sse_stream_wrapper(
 
-                lambda: chat_stream_generator_multimodal(multimodal_content, session_id, agent_id=agent_id, agent_task=agent_task, skill=skill or None),
+                lambda: chat_stream_generator_multimodal(multimodal_content, session_id, agent_id=agent_id, agent_task=agent_task, skill=skill or None, model_override=selected_model),
 
                 request,
                 session_id,
@@ -1152,7 +1168,7 @@ async def chat_with_file_stream(
 
         _sse_stream_wrapper(
 
-            lambda: chat_stream_generator(full_message_local, session_id, web_search=web_search, mode=mode, deep_think=deep_think, agent_id=aid_local, agent_task=atask_local, skill=skill or None),
+            lambda: chat_stream_generator(full_message_local, session_id, web_search=web_search, mode=mode, deep_think=deep_think, agent_id=aid_local, agent_task=atask_local, skill=skill or None, model_override=selected_model),
 
             request,
             session_id,
@@ -2359,13 +2375,13 @@ async def rename_chat_api(
 
 @router.get("/models", summary="获取可用模型列表")
 
-async def get_models(username: str = Depends(get_current_user)):
+async def get_models(username: str = Depends(require_auth)):
 
     """获取所有可用的 LLM 模型列表"""
 
-    current = get_current_model()
+    current = await asyncio.to_thread(load_user_model, username)
 
-    return {"models": AVAILABLE_MODELS, "current": current, "effective": get_effective_model()}
+    return {"models": AVAILABLE_MODELS, "current": current, "effective": resolve_model_id(current)}
 
 
 
@@ -2373,22 +2389,19 @@ async def get_models(username: str = Depends(get_current_user)):
 
 @router.post("/models/set", summary="切换模型")
 
-async def set_model(req: ModelSetRequest, username: str = Depends(get_current_user)):
+async def set_model(req: ModelSetRequest, username: str = Depends(require_auth)):
 
-    """切换当前使用的 LLM 模型"""
+    """仅切换已认证账号的模型；不修改其他账号或 worker 的全局配置。"""
 
-    success = set_current_model(req.model_id)
-
-    if success:
-        effective = get_effective_model()
-        return {
-            "success": True,
-            "current": get_current_model(),
-            "effective": effective,
-            "message": f"已切换到模型: {req.model_id}（实际使用: {effective}）",
-        }
-
-    return {"success": False, "message": f"不支持的模型: {req.model_id}"}
+    selected = await _request_model_id(req.model_id, username)
+    await asyncio.to_thread(save_user_model, username, selected)
+    effective = resolve_model_id(selected)
+    return {
+        "success": True,
+        "current": selected,
+        "effective": effective,
+        "message": f"已切换到模型: {selected}（实际使用: {effective}）",
+    }
 
 
 

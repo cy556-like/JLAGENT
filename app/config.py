@@ -166,6 +166,31 @@ def get_effective_model() -> str:
     return resolve_model_id(settings.LLM_MODEL)
 
 
+def get_model_connection(model: str, *, backup: bool = False) -> tuple[str, str]:
+    """One source of truth for the model's credential and compatible endpoint."""
+    if backup:
+        if not settings.LLM_API_KEY_BACKUP or not settings.LLM_BASE_URL_BACKUP:
+            raise ValueError('备用服务需要同时配置 API Key 和接口地址')
+        return settings.LLM_API_KEY_BACKUP, settings.LLM_BASE_URL_BACKUP
+    if model == 'DeepSeek-V4.1-Flash':
+        return settings.DEEPSEEK_V41_API_KEY, settings.DEEPSEEK_V41_BASE_URL
+    if model in VOLCENGINE_MODELS and settings.DEEPSEEK_API_KEY:
+        return settings.DEEPSEEK_API_KEY, settings.DEEPSEEK_BASE_URL
+    if model in QWEN_MODELS and settings.QWEN_API_KEY:
+        return settings.QWEN_API_KEY, settings.QWEN_BASE_URL
+    if model in MIMO_MODELS and settings.MIMO_API_KEY:
+        return settings.MIMO_API_KEY, settings.MIMO_BASE_URL
+    if model in KIMI_MODELS:
+        if not settings.MOONSHOT_API_KEY:
+            raise RuntimeError('Kimi K3 未配置 MOONSHOT_API_KEY，请在服务器 .env 中配置后重启服务')
+        return settings.MOONSHOT_API_KEY, settings.MOONSHOT_BASE_URL
+    if model in GLM_MODELS and settings.GLM_API_KEY:
+        return settings.GLM_API_KEY, settings.GLM_BASE_URL
+    if model in VISION_MODELS:
+        return VISION_API_KEY, VISION_BASE_URL
+    return settings.LLM_API_KEY, settings.LLM_BASE_URL
+
+
 def set_current_model(model_id: str) -> bool:
     """动态切换当前使用的模型"""
     valid_ids = [m["id"] for m in AVAILABLE_MODELS]
