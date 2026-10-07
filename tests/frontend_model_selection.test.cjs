@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'app/static/js/app.js'), 'utf8');
+const accountHelpers = source.slice(source.indexOf('// ===== Account Isolation ====='), source.indexOf('function canUploadKnowledgeBase('));
 const section = source.slice(source.indexOf('// ===== Model Management ====='), source.indexOf('// ===== Auth ====='));
 const send = source.slice(source.indexOf('async function sendMessage()'), source.indexOf('function sendQuick('));
 const retry = source.slice(source.indexOf('async function regenerateMessage('), source.indexOf('function showTyping('));
@@ -47,7 +48,7 @@ function harness() {
         removeFile() { context.selectedFile = null; }, async loadChatList() {}, scrollToBottom() {},
         resetStreamingUI() { context.isLoading = false; },
     });
-    vm.runInContext(section + '\n' + send + '\n' + retry, context);
+    vm.runInContext(accountHelpers + '\n' + section + '\n' + send + '\n' + retry, context);
     return { context, select, input, toasts, requests, streams,
         current: () => vm.runInContext('currentModelId', context),
         setCurrent: value => vm.runInContext('currentModelId = ' + JSON.stringify(value), context),
