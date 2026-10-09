@@ -38,6 +38,7 @@ import java.io.FileInputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.json.JSONObject;
@@ -53,12 +54,15 @@ public final class MainActivity extends Activity {
     private LinearLayout errorPanel;
     private TextView errorText;
     private ValueCallback<Uri[]> upload;
+    private String uploadAccount;
+    private int uploadNavigation;
     private EmbeddedDownloads downloads;
     private File pendingSave;
     private final ExecutorService fileIO = Executors.newSingleThreadExecutor();
     private String downloadScript;
     private int navigation;
     private boolean scriptInstalled;
+    private boolean backPending;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -141,6 +145,7 @@ public final class MainActivity extends Activity {
         WebSettings settings = web.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
+        settings.setUserAgentString(settings.getUserAgentString() + " JLAGENTAndroid/1.2.0");
         settings.setUseWideViewPort(true);
         settings.setLoadWithOverviewMode(true);
         settings.setTextZoom(100);
@@ -156,6 +161,8 @@ public final class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
                 navigation++;
+                backPending = false;
+                cancelUpload();
                 scriptInstalled = false;
                 downloads.resetChannel();
                 errorPanel.setVisibility(View.GONE);
@@ -184,6 +191,7 @@ public final class MainActivity extends Activity {
             }
             @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
                 downloads.resetChannel();
+                cancelUpload();
                 root.removeView(view);
                 view.destroy();
                 web = null;
@@ -193,11 +201,12 @@ public final class MainActivity extends Activity {
         });
         web.setWebChromeClient(new WebChromeClient() {
             @Override public void onProgressChanged(WebView view, int value) { progress.setProgress(value); }
-            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+            @Override public boolean onShowFileChooser(final WebView view, final ValueCallback<Uri[]> callback, FileChooserParams params) {
                 if (!currentSite()) return false;
-                if (upload != null) upload.onReceiveValue(null);
+                if (upload != null) { callback.onReceiveValue(null); return true; }
                 upload = callback;
-                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                uploadNavigation = navigation;
+                final Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 picker.addCategory(Intent.CATEGORY_OPENABLE);
                 picker.setType("*/*");
                 ArrayList<String> types = new ArrayList<String>();
@@ -206,12 +215,17 @@ public final class MainActivity extends Activity {
                 if (!types.isEmpty()) picker.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[types.size()]));
                 picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
                 picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                try { startActivityForResult(picker, PICK_FILE); }
-                catch (ActivityNotFoundException error) {
-                    upload.onReceiveValue(null);
-                    upload = null;
-                    toast("未找到系统文件选择器");
-                }
+                view.evaluateJavascript(accountStampScript(), new ValueCallback<String>() {
+                    @Override public void onReceiveValue(String stamp) {
+                        if (upload != callback) return;
+                        if (view != web || uploadNavigation != navigation || !currentSite() || stamp == null || "null".equals(stamp)) {
+                            cancelUpload(); return;
+                        }
+                        uploadAccount = stamp;
+                        try { startActivityForResult(picker, PICK_FILE); }
+                        catch (ActivityNotFoundException error) { cancelUpload(); toast("未找到系统文件选择器"); }
+                    }
+                });
                 return true;
             }
         });
@@ -228,9 +242,10 @@ public final class MainActivity extends Activity {
         if (scriptInstalled || view != web || !currentSite() || errorPanel.getVisibility() == View.VISIBLE) return;
         scriptInstalled = true;
         final int document = navigation;
-        view.evaluateJavascript(downloadScript, new ValueCallback<String>() {
+        final String nonce = UUID.randomUUID().toString();
+        view.evaluateJavascript(downloadScript + ";window.__jlNativeDownloads.bindNonce(" + JSONObject.quote(nonce) + ");", new ValueCallback<String>() {
             @Override public void onReceiveValue(String value) {
-                if (view == web && document == navigation && currentSite()) downloads.attach(view);
+                if (view == web && document == navigation && currentSite()) downloads.attach(view, nonce);
             }
         });
     }
@@ -269,14 +284,26 @@ public final class MainActivity extends Activity {
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
         if (request == PICK_FILE && upload != null) {
-            ArrayList<Uri> files = new ArrayList<Uri>();
+            final ArrayList<Uri> files = new ArrayList<Uri>();
             if (result == RESULT_OK && data != null && currentSite()) {
                 if (data.getClipData() != null) {
                     for (int i = 0; i < data.getClipData().getItemCount(); i++) addUpload(files, data.getClipData().getItemAt(i).getUri());
                 } else addUpload(files, data.getData());
             }
-            upload.onReceiveValue(files.isEmpty() ? null : files.toArray(new Uri[files.size()]));
-            upload = null;
+            if (files.isEmpty() || uploadNavigation != navigation || !currentSite()) { cancelUpload(); return; }
+            final ValueCallback<Uri[]> callback = upload;
+            final WebView page = web;
+            page.evaluateJavascript(accountStampScript(), new ValueCallback<String>() {
+                @Override public void onReceiveValue(String stamp) {
+                    if (upload != callback) return;
+                    if (page != web || uploadNavigation != navigation || !currentSite() || stamp == null || !stamp.equals(uploadAccount)) {
+                        cancelUpload(); return;
+                    }
+                    upload = null;
+                    uploadAccount = null;
+                    callback.onReceiveValue(files.toArray(new Uri[files.size()]));
+                }
+            });
         } else if (request == SAVE_FILE && pendingSave != null) {
             final File file = pendingSave;
             pendingSave = null;
@@ -306,13 +333,35 @@ public final class MainActivity extends Activity {
         if (uri != null && "content".equals(uri.getScheme())) files.add(uri);
     }
 
+    private static String accountStampScript() {
+        return "(function(){if(typeof nativeAccountStamp==='function')return nativeAccountStamp();" +
+                "if(typeof currentUser!=='undefined'&&currentUser&&typeof authToken!=='undefined'&&authToken)" +
+                "return JSON.stringify([typeof accountSessionVersion!=='undefined'?accountSessionVersion:null,currentUser," +
+                "typeof currentAgentId!=='undefined'?currentAgentId:null]);return null;})()";
+    }
+
+    private void cancelUpload() {
+        ValueCallback<Uri[]> previous = upload;
+        upload = null;
+        uploadAccount = null;
+        if (previous != null) previous.onReceiveValue(null);
+    }
+
     private void goBack() {
         if (web == null) { finish(); return; }
-        web.evaluateJavascript("(function(){var s=document.getElementById('sidebar');" +
-                "if(s&&s.classList.contains('mobile-open')&&typeof closeSidebarMobile==='function'){closeSidebarMobile();return true;}return false;})()",
+        if (backPending) return;
+        backPending = true;
+        final WebView page = web;
+        final int document = navigation;
+        page.evaluateJavascript("(function(){if(typeof handleAndroidBack==='function')return handleAndroidBack();" +
+                "var s=document.getElementById('sidebar');if(s&&s.classList.contains('mobile-open')&&typeof closeSidebarMobile==='function')" +
+                "{closeSidebarMobile();return 'handled';}return 'history';})()",
                 new ValueCallback<String>() {
                     @Override public void onReceiveValue(String closed) {
-                        if ("true".equals(closed)) return;
+                        backPending = false;
+                        if (page != web || document != navigation || isDestroyed()) return;
+                        if ("\"handled\"".equals(closed)) return;
+                        if ("\"home\"".equals(closed)) { finish(); return; }
                         if (web != null && web.canGoBack()) web.goBack(); else finish();
                     }
                 });
@@ -325,7 +374,7 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
     @Override protected void onDestroy() {
-        if (upload != null) { upload.onReceiveValue(null); upload = null; }
+        cancelUpload();
         if (pendingSave != null) { pendingSave.delete(); pendingSave = null; }
         if (downloads != null) downloads.close();
         fileIO.shutdown();

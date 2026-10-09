@@ -96,7 +96,8 @@ test('APK embeds supplied HTTPS site instead of launching a browser; bridge is o
     assert(source.includes('Intent.ACTION_CREATE_DOCUMENT'));
     assert.equal((manifest.match(/<uses-permission/g) || []).length, 1);
     assert(manifest.includes('android.permission.INTERNET'));
-    assert(manifest.includes('android:versionCode="2"'));
+    assert(manifest.includes('android:versionCode="3"'));
+    assert(source.includes('JLAGENTAndroid/1.2.0'));
     assert(manifest.includes('android:windowSoftInputMode="adjustResize"'));
     assert(manifest.includes('android:debuggable="false"'));
     assert(manifest.includes('android:usesCleartextTraffic="false"'));

@@ -14,9 +14,10 @@
 - 允许页面缩放；补充安全区域和 Android 键盘 viewport 提示。
 - `index.html`、Service Worker 资源版本一致更新。
 
-原有 `app.js`、桌面 `style.css`、登录策略、账户隔离、模型选择、API 路由、
-流式生成和数据库均未改。首次打开显示现有登录页；完整重新载入网站时，
-继续沿用该项目每次手动登录的现有策略，不承诺自动记住账户。
+初版手机布局未改 `app.js`。1.2.0 在 `app.js` 增加仅安卓版启用的登录恢复、
+返回键处理和知识库延迟响应保护；普通浏览器仍手动登录。
+桌面 `style.css`、模型选择、API 路由、流式生成和数据库均未改。
+首次打开显示现有登录页，令牌有效时后续打开无需重复输入密码。
 
 ## 验证
 
@@ -46,6 +47,8 @@
 APK 签名密钥和密码只保存在本地构建目录之外，不提交源码或服务器。
 后续 APK 升级须使用同一签名密钥。
 若已同步上面的四个手机静态文件，1.1.0 不需要再次改服务器，仅安装新 APK。
+1.2.0 需要额外同步 `app/static/js/app.js`、`app/static/index.html`、`app/static/sw.js`，
+同时安装新 APK，见 `android-session-20261009.md`。
 
 实现参考：[WebView](https://developer.android.com/reference/android/webkit/WebView)、
 [WebMessagePort](https://developer.android.com/reference/android/webkit/WebMessagePort)、

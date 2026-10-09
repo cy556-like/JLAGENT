@@ -62,7 +62,7 @@
 
 
     <link rel="stylesheet" href="/static/css/style.css?v=20260724b">
-    <link rel="stylesheet" href="/static/css/mobile.css?v=20261009-mobile-1">
+    <link rel="stylesheet" href="/static/css/mobile.css?v=20261009-app-session-1">
 
 
 </head>
@@ -170,7 +170,7 @@
                             <div class="form-group"><input type="password" id="loginPass" placeholder="输入密码" onkeydown="if(event.key==='Enter')doLogin()" autocomplete="current-password"></div>
 
 
-                            <button class="btn btn-login" onclick="doLogin()" aria-label="登录">登 录</button>
+                            <button class="btn btn-login" id="loginSubmit" onclick="doLogin()" aria-label="登录">登 录</button>
 
 
                             <div class="msg-box" id="loginMsg" role="status" aria-live="polite"></div>
@@ -553,7 +553,7 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
 
 
-        navigator.serviceWorker.register('/static/sw.js?v=20261009-zheng-wechat-2').then(function(reg) {
+        navigator.serviceWorker.register('/static/sw.js?v=20261009-app-session-1').then(function(reg) {
 
 
             console.log('SW registered:', reg.scope);
@@ -658,8 +658,8 @@ function toggleFaq(el) {
 </script>
 
 
-<script src="/static/js/app.js?v=20261009-zheng-wechat-2"></script>
-<script src="/static/js/mobile.js?v=20261009-mobile-1"></script>
+<script src="/static/js/app.js?v=20261009-app-session-1"></script>
+<script src="/static/js/mobile.js?v=20261009-app-session-1"></script>
 
 
 </body>

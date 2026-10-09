@@ -40,6 +40,55 @@ let agentSyncRequestVersion = 0;
 let agentSaveRequestVersion = 0;
 let streamRequestVersion = 0;
 let messageRequestVersion = 0;
+let kbListRequestVersion = 0;
+let docListRequestVersion = 0;
+let authValidationController = null;
+let loginSubmissionVersion = null;
+
+// UX marker only: authentication is still checked by the server, never by user-agent.
+function isEmbeddedAndroidApp() {
+    return /\bJLAGENTAndroid\/\d+\.\d+/.test(navigator.userAgent || '');
+}
+
+function recordAuthenticatedPage() {
+    // In the Android app, Back at the chat root must close the app, not log out.
+    if (isEmbeddedAndroidApp()) history.replaceState({page: 'chat'}, '');
+    else history.pushState({page: 'chat'}, '');
+}
+
+function nativeAccountStamp() {
+    return currentUser && authToken ? JSON.stringify([accountSessionVersion, currentUser, currentAgentId]) : null;
+}
+
+function handleAndroidBack() {
+    if (!isEmbeddedAndroidApp()) return 'history';
+    if (window._navigatingFromKb) return 'handled';
+    const closers = [
+        ['helpPopover', closeHelpPopover], ['renameOverlay', cancelRename],
+        ['docsModal', closeDocs], ['agentCreateModal', closeAgentCreateModal],
+    ];
+    for (const [id, close] of closers) {
+        const node = document.getElementById(id);
+        if (node && node.classList.contains('show')) { close(); return 'handled'; }
+    }
+    for (const id of ['exportDropdown', 'skillsDropdown', 'kbPanel']) {
+        const node = document.getElementById(id);
+        if (node && node.classList.contains('show')) { node.classList.remove('show'); return 'handled'; }
+    }
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar && sidebar.classList.contains('mobile-open')) { closeSidebarMobile(); return 'handled'; }
+    const kbPage = document.getElementById('kbPage');
+    if (kbPage && kbPage.style.display === 'flex') { hideKbPage(); return 'handled'; }
+    return currentUser && authToken ? 'home' : 'history';
+}
+
+async function restoreStartupSession() {
+    history.replaceState({page: 'login'}, '');
+    if (isEmbeddedAndroidApp()) return tryAutoLogin();
+    // Keep the existing manual-login policy for ordinary browser users.
+    localStorage.removeItem('authToken');
+    return false;
+}
 
 function captureAccountContext() {
     return { version: accountSessionVersion, username: currentUser, token: authToken };
@@ -1101,6 +1150,8 @@ function resetAccountState() {
     ++agentSyncRequestVersion;
     ++agentSaveRequestVersion;
     ++modelRequestVersion;
+    ++kbListRequestVersion;
+    ++docListRequestVersion;
     stopGeneration();
     currentUser = null;
     userRole = null;
@@ -1135,6 +1186,19 @@ function resetAccountState() {
     });
     const rename = document.getElementById('renameOverlay');
     if (rename) rename.classList.remove('show');
+    ['kbPageDocList', 'docList'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.innerHTML = '';
+    });
+    ['kbStatDocCount', 'kbStatChunkCount'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = '0';
+    });
+    ['docsModal', 'agentCreateModal', 'helpPopover', 'exportDropdown', 'skillsDropdown', 'kbPanel'].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.classList.remove('show');
+    });
+    window._navigatingFromKb = false;
     const kbToggle = document.getElementById('kbUploadToggle');
     if (kbToggle) { kbToggle.classList.remove('active'); kbToggle.setAttribute('aria-pressed', 'false'); }
     // The legacy keys have no owner. Recover real sessions/config from the
@@ -1594,23 +1658,32 @@ document.addEventListener('keydown', function(e) {
 });
 
 async function doLogin() {
+    if (loginSubmissionVersion === authRequestVersion) return;
     const username = document.getElementById('loginUser').value.trim();
-    const password = document.getElementById('loginPass').value.trim();
+    const password = document.getElementById('loginPass').value;
     const msgEl = document.getElementById('loginMsg');
     if (!username || !password) { msgEl.className = 'msg-box error'; msgEl.textContent = '请输入用户名和密码'; return; }
     const version = ++authRequestVersion;
+    if (authValidationController) { authValidationController.abort(); authValidationController = null; }
+    loginSubmissionVersion = version;
+    const submit = document.getElementById('loginSubmit');
+    if (submit) submit.disabled = true;
+    const controller = new AbortController();
+    authValidationController = controller;
+    const timer = setTimeout(() => controller.abort(), 15000);
     try {
-        const resp = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+        const resp = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }), signal: controller.signal });
         const data = await resp.json();
         if (version !== authRequestVersion) return;
         if (resp.ok && data.success && data.token) {
             activateAccount(username, data.token, data.role || 'user');
             localStorage.setItem('authToken', data.token);
             localStorage.setItem('userRole', userRole);
+            document.getElementById('loginPass').value = '';
             const account = captureAccountContext();
             msgEl.className = 'msg-box success'; msgEl.textContent = '登录成功！';
             setTimeout(async () => {
-                if (!isCurrentAccount(account)) return;
+                if (version !== authRequestVersion || !isCurrentAccount(account)) return;
                 // 初始化完成前保持聊天页隐藏，避免默认标题/欢迎页短暂闪现
                 document.getElementById('chatPage').style.display = 'none';
                 document.getElementById('headerUserName').textContent = username;
@@ -1623,7 +1696,7 @@ async function doLogin() {
                 const modelLoadPromise = loadModels();
                 await syncAgentsFromServer(true);  // [#12] 登录时强制同步一次，内部已调用 rebuildChatIdsFromServer（会GET /chats）
                 await modelLoadPromise;
-                if (!isCurrentAccount(account)) return;
+                if (version !== authRequestVersion || !isCurrentAccount(account)) return;
                 renderMyAgents();
                 updateKbUploadVisibility();
                 updateHeaderKbVisibility();
@@ -1637,11 +1710,15 @@ async function doLogin() {
                 document.getElementById('loginModal').classList.remove('show');
                 document.body.classList.add('body-chat-mode');
                 // [BUG FIX] Push history state so browser back button returns to login
-                history.pushState({page: 'chat'}, '');
+                recordAuthenticatedPage();
             }, 500);
         } else { msgEl.className = 'msg-box error'; msgEl.textContent = data.message || '登录失败'; }
     } catch (e) {
         if (version === authRequestVersion) { msgEl.className = 'msg-box error'; msgEl.textContent = '网络错误'; }
+    } finally {
+        clearTimeout(timer);
+        if (authValidationController === controller) authValidationController = null;
+        if (loginSubmissionVersion === version) { loginSubmissionVersion = null; if (submit) submit.disabled = false; }
     }
 }
 
@@ -1652,6 +1729,10 @@ async function doRegister() {
 
 function doLogout() {
     ++authRequestVersion;
+    loginSubmissionVersion = null;
+    const submit = document.getElementById('loginSubmit');
+    if (submit) submit.disabled = false;
+    if (authValidationController) { authValidationController.abort(); authValidationController = null; }
     resetAccountState();
     localStorage.removeItem('authToken');
     localStorage.removeItem('userRole');
@@ -1734,6 +1815,14 @@ window.addEventListener('popstate', function(e) {
             history.replaceState({page: 'login'}, '');
         }
     } else {
+        // Old app history entries may still contain login. Never use Back as logout.
+        if (isEmbeddedAndroidApp() && currentUser && authToken) {
+            history.replaceState({page: 'chat'}, '');
+            if (kbPage) kbPage.style.display = 'none';
+            if (chatContent) chatContent.style.display = 'flex';
+            window._navigatingFromKb = false;
+            return;
+        }
         // Back to login - perform logout to ensure clean state
         if (currentUser) {
             doLogout();
@@ -1746,16 +1835,38 @@ async function tryAutoLogin() {
     const token = localStorage.getItem('authToken');
     if (!token) return false;
     const version = ++authRequestVersion;
+    const controller = new AbortController();
+    if (authValidationController) authValidationController.abort();
+    authValidationController = controller;
+    let rejectedToken = false;
+    const msg = document.getElementById('loginMsg');
+    if (msg) { msg.textContent = '正在恢复登录…'; msg.className = 'msg-box'; }
     try {
-        const resp = await fetch('/api/v1/auth/me', { headers: { 'Authorization': 'Bearer ' + token } });
-        const data = await resp.json();
+        // This timeout applies only to the small auth check, never to model generation.
+        const timer = setTimeout(() => controller.abort(), 15000);
+        let resp, data;
+        try {
+            resp = await fetch('/api/v1/auth/me', { headers: { 'Authorization': 'Bearer ' + token }, signal: controller.signal });
+            data = await resp.json();
+        } finally { clearTimeout(timer); }
         if (version !== authRequestVersion) return false;
+        rejectedToken = resp.status === 401 || resp.status === 403 || (resp.ok && data.valid === false);
+        if (!resp.ok && !rejectedToken) throw new Error('登录验证服务暂时不可用');
         if (resp.ok && data.valid && data.username) {
-            activateAccount(data.username, token, data.role || localStorage.getItem('userRole') || 'user');
+            // /auth/me verifies the JWT first. Read only the role of that validated token;
+            // do not trust an old userRole left by a different account in localStorage.
+            let role = data.role || 'user';
+            if (!data.role) try {
+                const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+                const claim = JSON.parse(atob(part));
+                if (claim.role === 'admin') role = 'admin';
+            } catch (_) { }
+            activateAccount(data.username, token, role);
+            localStorage.setItem('userRole', role);
             const account = captureAccountContext();
             // 初始化完成前保持聊天页隐藏，避免默认标题/欢迎页短暂闪现
             document.getElementById('chatPage').style.display = 'none';
-            document.getElementById('headerUserName').textContent = data.username;
+            document.getElementById('headerUserName').textContent = data.username + (role === 'admin' ? ' (管理员)' : '');
             document.getElementById('headerUserAvatar').textContent = data.username[0].toUpperCase();
             loadChatList();
             const modelLoadPromise = loadModels();
@@ -1774,14 +1885,26 @@ async function tryAutoLogin() {
             document.getElementById('loginModal').classList.remove('show');
             document.body.classList.add('body-chat-mode');
             // [BUG FIX] Push history state so browser back button returns to login
-            history.pushState({page: 'chat'}, '');
+            recordAuthenticatedPage();
+            if (msg) { msg.textContent = ''; msg.className = 'msg-box'; }
             return true;
         }
-    } catch (e) { console.warn('自动登录失败', e); }
+    } catch (e) { console.warn('自动登录暂未完成'); }
+    finally { if (authValidationController === controller) authValidationController = null; }
     if (version !== authRequestVersion) return false;
-    localStorage.removeItem('authToken');
-    // 自动登录失败：确保登录页可见
+    if (rejectedToken && localStorage.getItem('authToken') === token) {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('userRole');
+    }
+    // A timeout/offline/5xx is not evidence of an invalid token. Keep it for the next open.
+    resetAccountState();
+    document.getElementById('chatPage').style.display = 'none';
+    document.body.classList.remove('body-chat-mode');
     document.getElementById('loginModal').classList.add('show');
+    if (msg) {
+        msg.textContent = rejectedToken ? '登录已失效，请重新输入账户密码' : '暂时无法恢复登录，请检查网络后重新打开 App，或手动登录';
+        msg.className = 'msg-box error';
+    }
     return false;
 }
 
@@ -3158,6 +3281,9 @@ async function showDocs() {
 function closeDocs() { document.getElementById('docsModal').classList.remove('show'); document.getElementById('uploadProgress').style.display = 'none'; }
 
 async function loadDocList() {
+    const account = captureAccountContext(), agentId = currentAgentId;
+    const version = ++docListRequestVersion;
+    const isCurrent = () => isCurrentAccount(account) && agentId === currentAgentId && version === docListRequestVersion;
     const list = document.getElementById('docList');
     list.innerHTML = '<div class="doc-empty">加载中...</div>';
     try {
@@ -3165,6 +3291,8 @@ async function loadDocList() {
         const agentParam = currentAgentId ? `?agent_id=${encodeURIComponent(currentAgentId)}` : '';
         const resp = await fetch(`/api/v1/documents${agentParam}`, { headers: apiHeaders() });
         const data = await resp.json();
+        if (!isCurrent()) return;
+        if (!resp.ok) throw new Error('文档列表请求失败');
         list.innerHTML = '';
         if (data.documents && data.documents.length > 0) {
             data.documents.forEach(doc => {
@@ -3181,7 +3309,7 @@ async function loadDocList() {
                 list.appendChild(item);
             });
         } else { list.innerHTML = '<div class="doc-empty">暂无文档，请上传</div>'; }
-    } catch (e) { list.innerHTML = '<div class="doc-empty">加载失败</div>'; }
+    } catch (e) { if (isCurrent()) list.innerHTML = '<div class="doc-empty">加载失败</div>'; }
 }
 
 async function onKbFileSelected(event) {
@@ -3603,12 +3731,8 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Centered mode init
     updateCenteredMode();
 
-    // [禁用自动登录] 每次访问必须手动输入用户名密码
-    localStorage.removeItem('authToken');
-
-    // [BUG FIX] Set initial history state for login page
-    // This ensures the browser back button has a proper state to return to
-    history.replaceState({page: 'login'}, '');
+    // Restore only the embedded app session; browsers keep manual login.
+    restoreStartupSession();
 
     // Landing page: nav scroll & smooth scroll (宣传页已删除，跳过)
 
@@ -3667,7 +3791,7 @@ async function showKbPage() {
     if (sidebarOverlay) sidebarOverlay.style.display = 'none';
     const docsLoadPromise = updateKbPageForCurrentAgent();
     // [BUG FIX] 推入历史状态，让浏览器←按钮能回到聊天页
-    history.pushState({page: 'kb'}, '');
+    if (!history.state || history.state.page !== 'kb') history.pushState({page: 'kb'}, '');
     // Setup drag and drop
     setupKbPageDragDrop();
     await docsLoadPromise;
@@ -3696,6 +3820,9 @@ function hideKbPage() {
 }
 
 async function loadKbPageDocs() {
+    const account = captureAccountContext(), agentId = currentAgentId;
+    const version = ++kbListRequestVersion;
+    const isCurrent = () => isCurrentAccount(account) && agentId === currentAgentId && version === kbListRequestVersion;
     const listEl = document.getElementById('kbPageDocList');
     if (!currentAgentId) {
         listEl.innerHTML = '<div class="kb-doc-empty">请先选择一个智能体</div>';
@@ -3703,8 +3830,10 @@ async function loadKbPageDocs() {
     }
     listEl.innerHTML = '<div class="kb-doc-empty">加载中...</div>';
     try {
-        const resp = await fetch('/api/v1/documents?agent_id=' + encodeURIComponent(currentAgentId), { headers: apiHeaders() });
+        const resp = await fetch('/api/v1/documents?agent_id=' + encodeURIComponent(agentId), { headers: apiHeaders() });
         const data = await resp.json();
+        if (!isCurrent()) return;
+        if (!resp.ok) throw new Error('文档列表请求失败');
         let docs = data.documents || data.files || [];
         if (!Array.isArray(docs)) docs = [];
         docs = docs.map(d => typeof d === 'string' ? d : (d.filename || d.name || d.title || String(d)));
@@ -3714,12 +3843,14 @@ async function loadKbPageDocs() {
         // Get chunk count from stats API
         let totalChunks = 0;
         try {
-            const chunkResp = await fetch('/api/v1/documents/stats?agent_id=' + encodeURIComponent(currentAgentId), { headers: apiHeaders() });
+            const chunkResp = await fetch('/api/v1/documents/stats?agent_id=' + encodeURIComponent(agentId), { headers: apiHeaders() });
             if (chunkResp.ok) {
                 const chunkData = await chunkResp.json();
+                if (!isCurrent()) return;
                 totalChunks = chunkData.total_chunks || 0;
             }
         } catch(e) { console.warn('获取知识库统计失败', e); }
+        if (!isCurrent()) return;
         document.getElementById('kbStatChunkCount').textContent = totalChunks;
         
         if (docs.length === 0) {
@@ -3756,6 +3887,7 @@ async function loadKbPageDocs() {
         });
         listEl.innerHTML = html;
     } catch (e) {
+        if (!isCurrent()) return;
         console.error('加载知识库文档失败', e);
         listEl.innerHTML = '<div class="kb-doc-empty">加载失败，请重试</div>';
     }

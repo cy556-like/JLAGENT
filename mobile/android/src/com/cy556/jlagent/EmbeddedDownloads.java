@@ -28,7 +28,7 @@ final class EmbeddedDownloads {
 
     EmbeddedDownloads(MainActivity activity) { this.activity = activity; }
 
-    void attach(WebView web) {
+    void attach(WebView web, String nonce) {
         resetChannel();
         if (!activity.currentSite()) return;
         WebMessagePort[] channel = web.createWebMessageChannel();
@@ -43,7 +43,7 @@ final class EmbeddedDownloads {
             }
         });
         // Transfer only to our top-frame origin; never use a wildcard or Uri.EMPTY.
-        web.postWebMessage(new WebMessage("JLAGENT_NATIVE_DOWNLOADS", new WebMessagePort[]{channel[1]}),
+        web.postWebMessage(new WebMessage("JLAGENT_NATIVE_DOWNLOADS:" + nonce, new WebMessagePort[]{channel[1]}),
                 Uri.parse(MainActivity.ORIGIN));
     }
 

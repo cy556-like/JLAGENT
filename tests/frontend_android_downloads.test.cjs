@@ -51,8 +51,11 @@ function harness(options = {}) {
         },
     };
     vm.runInNewContext(script, context);
-    if (events.has('message')) events.get('message')({data: 'JLAGENT_NATIVE_DOWNLOADS', ports: [port]});
-    return {context, messages, requests, notices, navigations, clicks, bytes,
+    if (events.has('message')) {
+        context.window.__jlNativeDownloads.bindNonce('native-test-nonce');
+        events.get('message')({data: 'JLAGENT_NATIVE_DOWNLOADS:native-test-nonce', ports: [port]});
+    }
+    return {context, messages, requests, notices, navigations, clicks, events, bytes,
         download: (...args) => context.window.__jlNativeDownloads.download(...args),
         maxInflight: () => maxInflight};
 }
@@ -163,4 +166,23 @@ test('zero-byte files finish normally; oversized files never start native transf
     await large.download('blob:' + ORIGIN + '/large', 'test.docx', '');
     assert.equal(large.messages.length, 0);
     assert(large.notices.some(value => value.includes('50MB')));
+});
+test('unsolicited iframe port cannot replace the native file channel', async () => {
+    const h = harness(); let leaked = 0;
+    const attacker = {postMessage() {leaked++;}, start() {}, close() {}};
+    h.events.get('message')({data: 'JLAGENT_NATIVE_DOWNLOADS:wrong-nonce', ports: [attacker]});
+    h.events.get('message')({data: 'JLAGENT_NATIVE_DOWNLOADS:native-test-nonce', ports: [attacker]});
+    await h.download('blob:' + ORIGIN + '/test', 'test.docx', '');
+    assert.equal(leaked, 0);
+    assert.equal(h.messages.at(-1).action, 'end');
+});
+test('channel reset during a download cancels old document transfer', async () => {
+    let native;
+    const h = harness({bytes: Buffer.alloc(100000), onSend: item => {
+        if (item.action === 'chunk') native.bindNonce('new-document');
+    }});
+    native = h.context.window.__jlNativeDownloads;
+    await h.download('blob:' + ORIGIN + '/test', 'test.docx', '');
+    assert(!h.messages.some(item => item.action === 'end'));
+    assert(h.notices.some(value => value.includes('页面已切换')));
 });

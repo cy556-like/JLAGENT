@@ -4,10 +4,11 @@
     const ORIGIN = 'https://47.114.99.132:8003';
     if (location.origin !== ORIGIN || window.__jlNativeDownloads) return;
     const CHUNK_SIZE = 49152, MAX_SIZE = 50 * 1024 * 1024;
-    let port = null, waiting = null, busy = false;
+    let port = null, waiting = null, busy = false, expectedNonce = null, channelVersion = 0;
     window.addEventListener('message', function (event) {
-        if (event.data !== 'JLAGENT_NATIVE_DOWNLOADS' || event.ports.length !== 1) return;
-        if (port) port.close();
+        // A cross-origin iframe must not replace the native port and intercept file bytes.
+        if (!expectedNonce || event.data !== 'JLAGENT_NATIVE_DOWNLOADS:' + expectedNonce ||
+            event.ports.length !== 1 || port) return;
         port = event.ports[0];
         port.onmessage = function (message) {
             let response;
@@ -26,11 +27,12 @@
     }
     function account() {
         return {token: typeof authToken !== 'undefined' ? authToken : localStorage.getItem('authToken'),
-            version: typeof accountSessionVersion !== 'undefined' ? accountSessionVersion : null};
+            version: typeof accountSessionVersion !== 'undefined' ? accountSessionVersion : null, channel: channelVersion};
     }
     function assertAccount(initial) {
         const current = account();
         if (initial.token !== current.token || initial.version !== current.version) throw new Error('账户已切换，下载已取消');
+        if (initial.channel !== channelVersion) throw new Error('页面已切换，下载已取消');
     }
     function send(id, action, payload) {
         return new Promise(function (resolve, reject) {
@@ -125,5 +127,16 @@
         }
         return null;
     };
-    window.__jlNativeDownloads = {download: download};
+    window.__jlNativeDownloads = {download: download, bindNonce: function (nonce) {
+        channelVersion++;
+        expectedNonce = nonce;
+        if (port) port.close();
+        port = null;
+        if (waiting) {
+            const previous = waiting;
+            waiting = null;
+            clearTimeout(previous.timer);
+            previous.reject(new Error('页面已切换，下载已取消'));
+        }
+    }};
 })();

@@ -4,17 +4,17 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-v1.1.6-zheng-wechat';
-const STATIC_CACHE = 'jlagent-static-v1.1.6-zheng-wechat';
+const CACHE_NAME = 'jlagent-v1.1.7-app-session';
+const STATIC_CACHE = 'jlagent-static-v1.1.7-app-session';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
     '/',
     '/static/css/style.css',
-    '/static/css/mobile.css?v=20261009-mobile-1',
-    '/static/js/mobile.js?v=20261009-mobile-1',
-    '/static/js/app.js?v=20261009-zheng-wechat-2',
+    '/static/css/mobile.css?v=20261009-app-session-1',
+    '/static/js/mobile.js?v=20261009-app-session-1',
+    '/static/js/app.js?v=20261009-app-session-1',
     '/static/images/zheng-wei-wechat-20261009-v2.png',
     '/static/manifest.json',
     '/static/icons/icon-gy.svg',

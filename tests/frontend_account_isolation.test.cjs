@@ -44,14 +44,16 @@ function harness(initialStorage = []) {
         return nodes.get(id);
     }
     const state = vm.createContext({
-        console: { log() {}, warn() {}, error() {} }, AbortController, TextDecoder, URL, URLSearchParams,
+        console: { log() {}, warn() {}, error() {} }, AbortController, TextDecoder, URL, URLSearchParams, atob,
         navigator: { userAgent: 'test desktop' },
         localStorage: { getItem: key => storage.has(key) ? storage.get(key) : null,
             setItem: (key, value) => storage.set(key, String(value)), removeItem: key => storage.delete(key) },
         document: { getElementById: dom, createElement: node, createTextNode: text => ({ textContent: text }),
             createDocumentFragment: node, documentElement: node(), body: node(), addEventListener() {}, querySelectorAll: () => [] },
         window: { innerWidth: 1200, addEventListener: (name, fn) => windowEvents.set(name, fn) },
-        history: { state: { page: 'login' }, pushState(value) { this.state = value; }, replaceState(value) { this.state = value; } },
+        history: { state: { page: 'login' }, pushes: 0, backs: 0,
+            pushState(value) { this.state = value; this.pushes++; }, replaceState(value) { this.state = value; },
+            back() { this.backs++; } },
         confirm: () => true, alert() {},
         setTimeout(fn) { const id = ++timerId; timers.set(id, { fn, repeat: false }); return id; },
         clearTimeout: id => timers.delete(id),
@@ -505,6 +507,206 @@ test('export body completing after account switch is discarded before creating a
     assert.deepEqual(h.toasts, []);
 });
 
+test('Android restart validates saved login without password or another login POST', async () => {
+    const token = 'android-valid-token';
+    const first = harness(); first.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0';
+    first.dom('loginUser').value = 'adminquanzhi'; first.dom('loginPass').value = 'test-only';
+    const defaultFetch = first.state.fetch;
+    first.state.fetch = async (url, options) => url.endsWith('/auth/login')
+        ? response({success: true, token, role: 'admin'}) : defaultFetch(url, options);
+    await first.state.doLogin(); await first.flushTimeouts();
+    assert.equal(first.dom('loginPass').value, '');
+    assert.equal(first.state.history.pushes, 0);
+    assert(![...first.storage.values()].some(value => value.includes('test-only')));
+    const reopened = harness([...first.storage]);
+    reopened.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0';
+    const reopenFetch = reopened.state.fetch;
+    let validations = 0;
+    reopened.state.fetch = async (url, options) => {
+        if (url.endsWith('/auth/me')) { validations++; assert.equal(options.headers.Authorization, 'Bearer ' + token);
+            return response({valid: true, username: 'adminquanzhi', role: 'admin'}); }
+        assert(!url.endsWith('/auth/login'));
+        assert.equal(options.headers.Authorization, 'Bearer ' + token);
+        return reopenFetch(url, options);
+    };
+    assert.equal(await reopened.state.restoreStartupSession(), true);
+    assert.equal(validations, 1);
+    assert.equal(reopened.read('currentUser'), 'adminquanzhi');
+    assert.equal(reopened.dom('chatPage').style.display, 'flex');
+    assert.equal(reopened.state.history.pushes, 0);
+    assert.equal(reopened.state.history.state.page, 'chat');
+});
+test('ordinary browser still requires manual login; app first launch has no hidden login request', async () => {
+    const browser = harness([['authToken', 'old-token']]);
+    assert.equal(await browser.state.restoreStartupSession(), false);
+    assert(!browser.storage.has('authToken'));
+    assert.equal(browser.requests.length, 0);
+    const app = harness(); app.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0';
+    assert.equal(await app.state.restoreStartupSession(), false);
+    assert.equal(app.requests.length, 0);
+});
+test('expired session clears saved token and does not request account data', async () => {
+    const h = harness([['authToken', 'expired'], ['userRole', 'admin']]);
+    h.state.fetch = async url => { assert(url.endsWith('/auth/me')); return response({valid: false}); };
+    assert.equal(await h.state.tryAutoLogin(), false);
+    assert(!h.storage.has('authToken') && !h.storage.has('userRole'));
+    assert.equal(h.read('currentUser'), null);
+    assert(h.dom('loginMsg').textContent.includes('失效'));
+});
+test('offline, 5xx and malformed auth responses preserve token without showing private chat', async () => {
+    for (const failure of [() => Promise.reject(new Error('offline')), () => response({}, 503),
+        () => ({ok: true, status: 200, json: async () => {throw new Error('not JSON');}})]) {
+        const h = harness([['authToken', 'keep-me']]); h.state.fetch = failure;
+        assert.equal(await h.state.tryAutoLogin(), false);
+        assert.equal(h.storage.get('authToken'), 'keep-me');
+        assert.equal(h.read('currentUser'), null);
+        assert.equal(h.dom('chatPage').style.display, 'none');
+        assert(h.dom('loginModal').classList.contains('show'));
+    }
+});
+test('only auth validation has a deadline; timeout preserves saved login', async () => {
+    const h = harness([['authToken', 'keep-me']]);
+    h.state.fetch = (url, options) => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('aborted')));
+    });
+    const request = h.state.tryAutoLogin();
+    await h.flushTimeouts();
+    assert.equal(await request, false);
+    assert.equal(h.storage.get('authToken'), 'keep-me');
+    assert.equal(h.read('currentUser'), null);
+});
+test('explicit logout forgets saved login and stale auth responses cannot restore it', async () => {
+    const h = harness([['authToken', 'old-token']]); const old = pending();
+    h.state.fetch = () => old.promise;
+    const request = h.state.tryAutoLogin(); h.state.doLogout();
+    old.resolve(response({valid: true, username: 'admin', role: 'admin'}));
+    assert.equal(await request, false);
+    assert(!h.storage.has('authToken'));
+    assert.equal(h.read('currentUser'), null);
+});
+test('manual login wins over an earlier validation without old token cleanup', async () => {
+    const h = harness([['authToken', 'old-token']]); const old = pending();
+    const defaultFetch = h.state.fetch;
+    h.state.fetch = async (url, options) => {
+        if (url.endsWith('/auth/me')) return old.promise;
+        if (url.endsWith('/auth/login')) return response({success: true, token: 'new-token', role: 'user'});
+        return defaultFetch(url, options);
+    };
+    const restore = h.state.tryAutoLogin();
+    h.dom('loginUser').value = 'new-user'; h.dom('loginPass').value = 'test-only';
+    await h.state.doLogin();
+    old.resolve(response({valid: false})); await restore;
+    assert.equal(h.storage.get('authToken'), 'new-token');
+    assert.equal(h.read('currentUser'), 'new-user');
+});
+test('restored role comes from validated JWT, never another account local role', async () => {
+    for (const role of ['user', 'admin']) {
+        const token = 'header.' + Buffer.from(JSON.stringify({role})).toString('base64url') + '.signature';
+        const h = harness([['authToken', token], ['userRole', role === 'user' ? 'admin' : 'user']]);
+        const defaultFetch = h.state.fetch;
+        h.state.fetch = async (url, options) => url.endsWith('/auth/me')
+            ? response({valid: true, username: 'owner'}) : defaultFetch(url, options);
+        assert.equal(await h.state.tryAutoLogin(), true);
+        assert.equal(h.read('userRole'), role);
+        assert.equal(h.storage.get('userRole'), role);
+    }
+});
+test('Android Back closes overlays and drawer before treating chat as app root', () => {
+    const h = harness(); h.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0'; h.login('admin');
+    for (const id of ['renameOverlay', 'docsModal', 'agentCreateModal', 'exportDropdown', 'skillsDropdown', 'kbPanel']) {
+        h.dom(id).classList.add('show');
+        assert.equal(h.state.handleAndroidBack(), 'handled');
+        assert(!h.dom(id).classList.contains('show'));
+    }
+    h.dom('sidebar').classList.add('mobile-open');
+    assert.equal(h.state.handleAndroidBack(), 'handled');
+    assert(!h.dom('sidebar').classList.contains('mobile-open'));
+    assert.equal(h.state.handleAndroidBack(), 'home');
+    assert.equal(h.read('currentUser'), 'admin');
+});
+test('Android Back does not log out through legacy login history', () => {
+    const h = harness(); h.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0'; h.login('admin');
+    h.windowEvents.get('popstate')({state: {page: 'login'}});
+    assert.equal(h.read('currentUser'), 'admin');
+    assert.equal(h.state.history.state.page, 'chat');
+});
+test('knowledge page repeat opens do not stack duplicate history; Back handles pending navigation once', async () => {
+    const h = harness(); h.state.navigator.userAgent = 'Android JLAGENTAndroid/1.2.0'; h.login('admin');
+    h.set({currentAgentId: 'dfmea-risk-agent'});
+    h.state.updateKbPageForCurrentAgent = async () => {};
+    h.state.setupKbPageDragDrop = () => {};
+    await h.state.showKbPage(); await h.state.showKbPage();
+    assert.equal(h.state.history.pushes, 1);
+    assert.equal(h.state.handleAndroidBack(), 'handled');
+    assert.equal(h.state.history.backs, 1);
+    assert.equal(h.state.handleAndroidBack(), 'handled');
+    assert.equal(h.state.history.backs, 1);
+});
+test('old account and old agent knowledge responses never replace current document list', async () => {
+    for (const functionName of ['loadDocList', 'loadKbPageDocs']) {
+        for (const change of ['account', 'agent']) {
+            const h = harness(); h.login('admin'); h.set({currentAgentId: 'dfmea-risk-agent'});
+            const old = pending(); h.state.fetch = () => old.promise;
+            const request = h.state[functionName]();
+            if (change === 'account') {h.state.doLogout(); h.login('adminquanzhi');}
+            else h.set({currentAgentId: 'quality-leadership-agent'});
+            h.dom('docList').innerHTML = 'current-list'; h.dom('kbPageDocList').innerHTML = 'current-list';
+            old.resolve(response({documents: ['private-old.docx']})); await request;
+            assert.equal(h.dom('docList').innerHTML, 'current-list');
+            assert.equal(h.dom('kbPageDocList').innerHTML, 'current-list');
+        }
+    }
+});
+test('newer same-agent knowledge response wins including delayed stats', async () => {
+    const h = harness(); h.login('admin'); h.set({currentAgentId: 'dfmea-risk-agent'});
+    const oldStats = pending(), statsStarted = pending(); let lists = 0, stats = 0;
+    h.state.fetch = (url) => {
+        if (url.includes('/stats')) {
+            if (++stats === 1) { statsStarted.resolve(); return oldStats.promise; }
+            return Promise.resolve(response({total_chunks: 20}));
+        }
+        return Promise.resolve(response({documents: [++lists === 1 ? 'old.docx' : 'new.docx']}));
+    };
+    const oldRequest = h.state.loadKbPageDocs();
+    await statsStarted.promise;
+    await h.state.loadKbPageDocs();
+    oldStats.resolve(response({total_chunks: 99})); await oldRequest;
+    assert(h.dom('kbPageDocList').innerHTML.includes('new.docx'));
+    assert(!h.dom('kbPageDocList').innerHTML.includes('old.docx'));
+    assert.equal(h.dom('kbStatChunkCount').textContent, 20);
+});
+test('native upload stamp changes on account, agent and login lifetime, without exposing token', () => {
+    const h = harness(); h.login('admin'); const first = h.state.nativeAccountStamp();
+    assert(!first.includes('admin-token'));
+    h.set({currentAgentId: 'dfmea-risk-agent'}); assert.notEqual(h.state.nativeAccountStamp(), first);
+    h.login('admin'); assert.notEqual(h.state.nativeAccountStamp(), first);
+    h.state.doLogout(); assert.equal(h.state.nativeAccountStamp(), null);
+});
+test('duplicate login tap sends once; exact password including spaces is preserved', async () => {
+    const h = harness(), login = pending(); let calls = 0;
+    h.dom('loginUser').value = ' admin '; h.dom('loginPass').value = ' test-password ';
+    h.state.fetch = (url, options) => {
+        calls++; assert.deepEqual(JSON.parse(options.body), {username: 'admin', password: ' test-password '});
+        return login.promise;
+    };
+    const first = h.state.doLogin(); const duplicate = h.state.doLogin();
+    assert.equal(h.dom('loginSubmit').disabled, true);
+    login.resolve(response({success: true, token: 'test-token', role: 'user'}));
+    await first; await duplicate;
+    assert.equal(calls, 1);
+    assert.equal(h.dom('loginSubmit').disabled, false);
+    assert.equal(h.dom('loginPass').value, '');
+});
+test('manual login timeout releases submit without persisting password or logging in', async () => {
+    const h = harness(); h.dom('loginUser').value = 'admin'; h.dom('loginPass').value = 'test-only';
+    h.state.fetch = (url, options) => new Promise((resolve, reject) => {
+        options.signal.addEventListener('abort', () => reject(new Error('timeout')));
+    });
+    const request = h.state.doLogin(); await h.flushTimeouts(); await request;
+    assert.equal(h.dom('loginSubmit').disabled, false);
+    assert.equal(h.read('currentUser'), null);
+    assert(!h.storage.has('authToken'));
+});
 test('API requests remain excluded from service worker cache; asset versions match', () => {
     const html = fs.readFileSync(path.join(__dirname, '../app/static/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(__dirname, '../app/static/sw.js'), 'utf8');
