@@ -157,7 +157,7 @@ const ZHENG_TEACHER_PROFILE = {
         wechat: {
             label: '个人微信',
             content: '如需要联系郑伟老师，请加微信：',
-            image: '/static/images/zheng-wei-wechat-20261009.png',
+            image: '/static/images/zheng-wei-wechat-20261009-v2.png',
             imageAlt: '郑伟老师个人微信二维码'
         }
     }
