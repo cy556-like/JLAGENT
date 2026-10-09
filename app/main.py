@@ -267,6 +267,7 @@ def create_app() -> FastAPI:
         _shutdown_requested = True
         logger = logging.getLogger("app")
         logger.info(f"收到关闭信号，等待 {_active_connections} 个活跃连接完成...")
+        get_runtime_limits().shutdown()
 
     # ===== 后台定期清理任务：防止内存泄漏 =====
     @app.on_event("startup")

@@ -22,8 +22,27 @@ from langchain_core.tools import tool
 import asyncio
 from app.config import settings
 from app.rag.document import search_documents, search_documents_async, index_document, list_indexed_documents, delete_document, update_document, export_document_as_docx, export_document_as_xlsx, get_document_content
+from app.rag.document import document_mutation_resources
+from app.utils.resource_guard import bounded_document_work, document_thread
 
 logger = logging.getLogger(__name__)
+
+
+def document_tool(function=None, *, lane='document-work', requires=None):
+    """Keep the existing sync tool API/schema and add an isolated async path."""
+    if function is None:
+        return lambda function: document_tool(function, lane=lane, requires=requires)
+    worker = bounded_document_work(function, lane=lane, requires=requires)
+    result = tool(worker)
+    @wraps(function)
+    async def invoke_document(*args, **kwargs):
+        return await document_thread(worker, *args, **kwargs)
+    result.coroutine = invoke_document
+    return result
+
+
+def _tool_mutation_resources(arguments):
+    return document_mutation_resources(dict(arguments, agent_id=get_current_agent_id()))
 
 # ===== 当前智能体上下文 =====
 # 用于在 Agent 工具调用时传递 agent_id，实现知识库隔离
@@ -365,7 +384,7 @@ async def search_documents_tool(query: str) -> str:
         # 兜底：尝试磁盘文件搜索
         try:
             from app.rag.document import _search_disk_files
-            fallback_results = await asyncio.to_thread(_search_disk_files, query, top_k=5, agent_id=current_aid)
+            fallback_results = await document_thread(_search_disk_files, query, top_k=5, agent_id=current_aid)
             if fallback_results:
                 results = fallback_results
             else:
@@ -533,7 +552,7 @@ def list_documents_tool() -> str:
     return output
 
 
-@tool
+@document_tool(requires=_tool_mutation_resources)
 def upload_document_tool(file_path: str) -> str:
     """将新文档上传并索引到知识库，使其可被搜索。
 
@@ -562,7 +581,7 @@ def upload_document_tool(file_path: str) -> str:
         return f"【上传失败】{str(e)}\n可能原因：文件损坏、内容为空或格式异常。请检查文件后重试。"
 
 
-@tool
+@document_tool(lane='document-read')
 def get_document_content_tool(filename: str) -> str:
     """获取知识库中指定文档的完整内容。直接从原始文件读取，不依赖向量搜索，不会消耗embedding额度。
 
@@ -595,7 +614,7 @@ def get_document_content_tool(filename: str) -> str:
     return output
 
 
-@tool
+@document_tool(requires=_tool_mutation_resources)
 def delete_document_tool(filename: str) -> str:
     """从知识库中删除指定文档，同时移除其所有向量分块和原始文件。此操作不可恢复。
 
@@ -618,7 +637,7 @@ def delete_document_tool(filename: str) -> str:
         return f"【删除失败】{str(e)}"
 
 
-@tool
+@document_tool(requires=_tool_mutation_resources)
 def modify_document_tool(filename: str, content: str, append: bool = False) -> str:
     """修改知识库中已有文档的内容。支持替换全部内容或在原文末尾追加内容。
 
@@ -706,7 +725,7 @@ def modify_document_tool(filename: str, content: str, append: bool = False) -> s
         return f"【修改失败】{str(e)}"
 
 
-@tool
+@document_tool(lane='document-export')
 def export_document_tool(content: str, filename: str = "", title: str = "") -> str:
     """将文本内容生成为docx文档并提供下载链接。用于生成综合文档、简略文档、汇总报告等。
 
@@ -750,7 +769,7 @@ def export_document_tool(content: str, filename: str = "", title: str = "") -> s
         return f"【导出失败】{str(e)}"
 
 
-@tool
+@document_tool(lane='document-export')
 def export_xlsx_tool(content: str, filename: str = "", title: str = "") -> str:
     """将文本内容生成为xlsx（Excel）文档并提供下载链接。用于生成表格数据、汇总报表等Excel文件。
 

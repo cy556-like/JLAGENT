@@ -49,14 +49,31 @@ from urllib.parse import unquote
 
 
 from app.agent.core import chat, chat_stream_generator, chat_stream_generator_multimodal, reset_agent
-from app.utils.resource_guard import SSE_BUFFER_EVENTS, document_thread, bounded_document_work
+from app.utils.resource_guard import SSE_BUFFER_EVENTS, document_thread, bounded_document_work, get_runtime_limits
+from app.rag.document import document_path_resources, document_mutation_resources
 
 
-@bounded_document_work
+@bounded_document_work(requires=lambda args: document_path_resources(args['file_path'], '4-disk', 'exclusive'))
 def _save_uploaded_bytes(file_path, content):
     # Called in a worker thread; a slow disk must not block every active SSE.
     with open(file_path, 'wb') as target:
         target.write(content)
+
+
+@bounded_document_work(requires=document_mutation_resources)
+def _process_uploaded_bytes(file_path, content, filename, agent_id=None, index_to_kb=True):
+    # Saving + indexing one file is a single transaction; unrelated files run
+    # in parallel. A failed old upload cannot delete a newer upload.
+    _save_uploaded_bytes(file_path, content)
+    if not index_to_kb:
+        return load_document(file_path)
+    try:
+        return index_document(file_path, filename, agent_id=agent_id)
+    except Exception:
+        with get_runtime_limits().locked(document_path_resources(file_path, '4-disk', 'exclusive')):
+            if os.path.exists(file_path):
+                os.remove(file_path)
+        raise
 
 
 # [BUG FIX v5] 可复用的 SSE 流式包装器：客户端断开时真正取消 Agent 执行
@@ -1101,8 +1118,6 @@ async def chat_with_file_stream(
 
             file_path = os.path.join(temp_dir, decoded_filename)
 
-        await document_thread(_save_uploaded_bytes, file_path, file_content_raw)
-        del file_content_raw
 
 
 
@@ -1112,15 +1127,15 @@ async def chat_with_file_stream(
 
             try:
 
-                index_result = await document_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
+                index_result = await document_thread(_process_uploaded_bytes, file_path, file_content_raw,
+                                                    decoded_filename, agent_id=agent_id)
+                del file_content_raw
 
                 indexing_mode = index_result.get('indexing_mode', 'unknown')
 
                 logger.info(f"文件已索引到知识库: {file.filename}, agent_id={agent_id}, 分块数={index_result.get('chunks', 0)}, 索引模式={indexing_mode}")
 
             except Exception as e:
-
-                os.remove(file_path)
 
                 raise HTTPException(status_code=500, detail=f"文档索引失败: {str(e)}")
 
@@ -1132,7 +1147,9 @@ async def chat_with_file_stream(
 
             try:
 
-                docs = await document_thread(load_document, file_path)
+                docs = await document_thread(_process_uploaded_bytes, file_path, file_content_raw,
+                                             decoded_filename, agent_id=agent_id, index_to_kb=False)
+                del file_content_raw
 
                 text = "\n".join([doc.page_content for doc in docs])
 
@@ -1300,8 +1317,6 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
 
         file_path = os.path.join(settings.DOCUMENTS_DIR, decoded_filename)
 
-    await document_thread(_save_uploaded_bytes, file_path, file_content_raw)
-    del file_content_raw
 
 
 
@@ -1313,7 +1328,9 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
 
         # 避免文件加载+分块+Embedding API调用阻塞整个事件循环
 
-        result = await document_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
+        result = await document_thread(_process_uploaded_bytes, file_path, file_content_raw,
+                                       decoded_filename, agent_id=agent_id)
+        del file_content_raw
 
         indexing_mode_result = result.get('indexing_mode', 'unknown')
 
@@ -1324,8 +1341,6 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
     except Exception as e:
 
         # 索引失败则删除文件
-
-        os.remove(file_path)
 
         raise HTTPException(status_code=500, detail=f"文档索引失败: {str(e)}")
 
@@ -3159,7 +3174,7 @@ async def reindex_knowledge(agent_id: str = Query(None, description="智能体ID
 
 @router.get("/migrate/cleanup-collections", summary="清理异常的 ChromaDB collection")
 
-@bounded_document_work
+@bounded_document_work(requires=lambda args: [('0-maintenance', 'exclusive')])
 def cleanup_collections():
 
     """

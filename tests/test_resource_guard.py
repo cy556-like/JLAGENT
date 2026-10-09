@@ -28,6 +28,18 @@ guard = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(guard)
 
 
+def setUpModule():
+    global module_temp
+    module_temp = tempfile.TemporaryDirectory()
+    guard._runtime = limits(module_temp.name)
+
+
+def tearDownModule():
+    guard._runtime.shutdown(wait=True)
+    guard.background_indexes.executor.shutdown(wait=True)
+    module_temp.cleanup()
+
+
 def limits(directory, **changes):
     env = {'JLAGENT_' + key.upper(): str(value) for key, value in changes.items()}
     with patch.dict(os.environ, env, clear=True):
@@ -91,14 +103,14 @@ class SlotsTests(unittest.TestCase):
     def test_defaults_and_invalid_environment_do_not_block_every_request(self):
         runtime = limits(self.temp.name)
         self.assertEqual((runtime.chat_limit, runtime.user_chat_limit, runtime.file_limit,
-                          runtime.document_limit, runtime.read_limit), (20, 2, 2, 1, 2))
+                          runtime.document_limit, runtime.read_limit), (20, 2, 20, 10, 10))
         bad = limits(self.temp.name, chat_concurrency='bad', file_concurrency=0,
                      document_concurrency=-1)
-        self.assertEqual((bad.chat_limit, bad.file_limit, bad.document_limit), (20, 2, 1))
+        self.assertEqual((bad.chat_limit, bad.file_limit, bad.document_limit), (20, 20, 10))
         self.assertTrue(runtime.snapshot()['shared_across_workers'])
 
     def test_nested_document_calls_do_not_deadlock(self):
-        runtime = limits(self.temp.name)
+        runtime = limits(self.temp.name, document_concurrency=1)
         with patch.object(guard, 'get_runtime_limits', return_value=runtime):
             @guard.bounded_document_work
             def outer():
@@ -125,7 +137,7 @@ class SlotsTests(unittest.TestCase):
 class AdmissionTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.runtime = limits(self.temp.name)
+        self.runtime = limits(self.temp.name, file_concurrency=2, user_file_concurrency=1)
         self.started = asyncio.Queue()
         self.release = asyncio.Event()
         self.running = []
@@ -404,7 +416,9 @@ class StreamingTests(unittest.IsolatedAsyncioTestCase):
 class DocumentWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def test_event_loop_stays_responsive_while_document_workers_wait(self):
         with tempfile.TemporaryDirectory() as directory:
-            runtime = limits(directory)
+            runtime = limits(directory, document_concurrency=1)
+            runtime_patch = patch.object(guard, 'get_runtime_limits', return_value=runtime)
+            runtime_patch.start()
             first, stop = threading.Event(), threading.Event()
             active, maximum = 0, 0
             lock = threading.Lock()
@@ -429,6 +443,8 @@ class DocumentWorkerTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 stop.set()
                 await asyncio.wait_for(asyncio.gather(*tasks), 3)
+                runtime.shutdown(wait=True)
+                runtime_patch.stop()
             self.assertEqual(maximum, 1)
 
     async def test_upload_and_file_chat_save_exact_bounded_bytes_off_event_loop(self):
@@ -461,6 +477,7 @@ class DocumentWorkerTests(unittest.IsolatedAsyncioTestCase):
                          logger=logging.getLogger('test-upload'), MAX_FILE_SIZE=12,
                          settings=SimpleNamespace(DOCUMENTS_DIR=directory, DATA_DIR=directory),
                          os=os, time=time, unquote=unquote, base64=base64)
+            scope['_process_uploaded_bytes'] = source_function('app/api/routes.py', '_process_uploaded_bytes', scope)
             async def model(*args):
                 return 'auto'
             scope['_request_model_id'] = model
@@ -538,9 +555,9 @@ class AsyncSearchTests(unittest.IsolatedAsyncioTestCase):
 class SourceCoverageTests(unittest.TestCase):
     def test_every_guarded_route_call_uses_worker_offload(self):
         tree = ast.parse((ROOT / 'app/api/routes.py').read_text(encoding='utf-8-sig'))
-        heavy = {'load_document', 'index_document', 'update_document', 'delete_document',
+        heavy = {'load_document', 'update_document', 'delete_document',
                  'delete_agent_collection', 'reindex_all_documents', 'export_document_as_docx',
-                 'export_document_as_xlsx', 'search_documents', '_save_uploaded_bytes'}
+                 'export_document_as_xlsx', 'search_documents', '_process_uploaded_bytes'}
         found = set()
         for function in tree.body:
             if isinstance(function, ast.AsyncFunctionDef):
@@ -564,13 +581,14 @@ class SourceCoverageTests(unittest.TestCase):
         tree = ast.parse((ROOT / 'app/rag/document.py').read_text(encoding='utf-8-sig'))
         imports = {n.name for node in tree.body if isinstance(node, ast.ImportFrom) and
                    node.module == 'app.utils.resource_guard' for n in node.names}
-        self.assertEqual(imports, {'bounded_document_work', 'background_indexes'})
+        self.assertEqual(imports, {'bounded_document_work', 'background_indexes', 'document_thread',
+                                   'get_runtime_limits', 'resource_key', 'resource_locked'})
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         self.assertEqual(ast.unparse(functions['load_document'].decorator_list[0]),
-                         "bounded_document_work(lane='document-read')")
+                         "bounded_document_work(lane='document-read', requires=lambda args: document_path_resources(args['file_path'], '4-disk', 'shared'))")
         for name in ('index_document', 'reindex_all_documents', 'update_document', 'delete_document',
                      'delete_agent_collection'):
-            self.assertEqual(ast.unparse(functions[name].decorator_list[0]), 'bounded_document_work')
+            self.assertIn('requires=', ast.unparse(functions[name].decorator_list[0]))
         for name in ('export_document_as_docx', 'export_document_as_xlsx'):
             self.assertEqual(ast.unparse(functions[name].decorator_list[0]),
                              "bounded_document_work(lane='document-export')")

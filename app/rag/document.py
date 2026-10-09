@@ -22,6 +22,7 @@ import asyncio
 from typing import Optional
 import time
 import threading
+import uuid
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
@@ -45,9 +46,91 @@ except ImportError:
     _JIEBA_AVAILABLE = False
 
 from app.config import settings
-from app.utils.resource_guard import bounded_document_work, background_indexes
+from app.utils.resource_guard import (bounded_document_work, background_indexes, document_thread,
+                                     get_runtime_limits, resource_key, resource_locked)
 
 logger = logging.getLogger(__name__)
+
+
+def document_collection_resources(arguments, exclusive=False):
+    return [('0-maintenance', 'shared'),
+            (resource_key('1-collection', _get_collection_name(arguments.get('agent_id'))),
+             'exclusive' if exclusive else 'shared')]
+
+
+def document_path_resources(file_path, kind='2-source', mode='mutex'):
+    return [(resource_key(kind, os.path.normcase(os.path.abspath(file_path))), mode)]
+
+
+def document_mutation_resources(arguments):
+    resources = document_collection_resources(arguments)
+    if arguments.get('file_path'):
+        paths = [arguments['file_path']]
+    else:
+        filename, agent_id = arguments['filename'], arguments.get('agent_id')
+        global_path = os.path.join(settings.DOCUMENTS_DIR, filename)
+        paths = [global_path]
+        if agent_id:
+            agent_path = os.path.join(settings.DOCUMENTS_DIR, f'agent_{agent_id}', filename)
+            paths = [agent_path]
+            if not os.path.exists(agent_path):
+                paths.append(global_path)
+        # PDF updates turn into TXT; protect the destination as well.
+        if filename.lower().endswith('.pdf'):
+            paths += [path.rsplit('.', 1)[0] + '.txt' for path in list(paths)]
+    for path in paths:
+        resources.extend(document_path_resources(path))
+    return resources
+
+
+def _keyword_resources(arguments):
+    return document_path_resources(_get_keyword_index_path(arguments.get('agent_id')), '3-keyword')
+
+
+def _store_embedding_batch(vector_store, chunks, agent_id):
+    # Match Chroma.add_documents/add_texts without holding a DB writer lock
+    # during the remote embedding call. Never mutate the shared embedder.
+    texts = [chunk.page_content for chunk in chunks]
+    metadatas = [chunk.metadata for chunk in chunks]
+    ids = [getattr(chunk, 'id', None) or str(uuid.uuid4()) for chunk in chunks]
+    embedder = vector_store._embedding_function
+    if embedder is None:
+        raise RuntimeError('Embedding client unavailable')
+    vectors = embedder.embed_documents(texts)
+    if vectors is None or len(vectors) != len(texts):
+        raise ValueError('Embedding result count does not match document chunks')
+    key = resource_key('3-vector-write', _get_collection_name(agent_id))
+    with get_runtime_limits().locked(((key, 'mutex'),)):
+        vector_store._collection.upsert(ids=ids, documents=texts, metadatas=metadatas, embeddings=vectors)
+
+
+def _delete_vector_chunks(vector_store, filename, agent_id):
+    key = resource_key('3-vector-write', _get_collection_name(agent_id))
+    with get_runtime_limits().locked(((key, 'mutex'),)):
+        collection = vector_store._collection
+        ids = collection.get(where={'source_file': filename}, include=['metadatas']).get('ids') or []
+        if ids:
+            collection.delete(ids=ids)
+        return len(ids)
+
+
+@resource_locked(lambda args: document_path_resources(args['file_path'], '4-disk', 'exclusive'))
+def _remove_document_file(file_path):
+    os.remove(file_path)
+
+
+@resource_locked(_keyword_resources)
+def _clear_keyword_index(agent_id=None):
+    path = _get_keyword_index_path(agent_id)
+    if os.path.exists(path):
+        os.remove(path)
+
+
+def _oldest_cache_key(cache):
+    # A reader may build a cache while indexing invalidates it. Snapshot before
+    # iterating; do not hold an index lock during tokenization or retrieval.
+    snapshot = cache.copy()
+    return min(snapshot, key=lambda key: snapshot[key].get('updated_at', 0)) if snapshot else None
 
 # 本地 Embedding 批量大小（本地模型无API限制，可适当增大）
 EMBEDDING_BATCH_SIZE = 50  # 智谱 embedding-3 API 单次最多64条，留余量用50
@@ -125,6 +208,7 @@ def _get_keyword_index_path(agent_id: str = None) -> str:
     return os.path.join(KEYWORD_INDEX_DIR, f"index_{safe_key}.json")
 
 
+@resource_locked(_keyword_resources)
 def _load_keyword_index(agent_id: str = None) -> list[dict]:
     """从磁盘加载关键词索引
 
@@ -142,6 +226,7 @@ def _load_keyword_index(agent_id: str = None) -> list[dict]:
         return []
 
 
+@resource_locked(_keyword_resources)
 def _save_keyword_index(index_data: list[dict], agent_id: str = None):
     """保存关键词索引到磁盘
 
@@ -151,13 +236,20 @@ def _save_keyword_index(index_data: list[dict], agent_id: str = None):
     """
     index_path = _get_keyword_index_path(agent_id)
     os.makedirs(os.path.dirname(index_path), exist_ok=True)
+    temporary = index_path + '.' + uuid.uuid4().hex + '.tmp'
     try:
-        with open(index_path, 'w', encoding='utf-8') as f:
+        with open(temporary, 'w', encoding='utf-8') as f:
             json.dump(index_data, f, ensure_ascii=False, indent=2)
+        os.replace(temporary, index_path)
     except Exception as e:
         logger.error(f"保存关键词索引失败: {e}")
+        raise
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
+@resource_locked(_keyword_resources)
 def _add_chunks_to_keyword_index(chunks: list, filename: str, agent_id: str = None):
     """将文档分块添加到关键词索引
 
@@ -183,11 +275,12 @@ def _add_chunks_to_keyword_index(chunks: list, filename: str, agent_id: str = No
     # [性能优化 1] BM25 缓存失效：索引变更后清除缓存
     cache_key = agent_id or "__global__"
     if cache_key in _keyword_bm25_cache:
-        del _keyword_bm25_cache[cache_key]
+        _keyword_bm25_cache.pop(cache_key, None)
         logger.debug(f"[性能优化 1] BM25关键词索引缓存已失效: {cache_key}")
     logger.info(f"关键词索引已更新: {filename}, 新增 {len(chunks)} 个分块, 索引总条目={len(index_data)}")
 
 
+@resource_locked(_keyword_resources)
 def _delete_from_keyword_index(filename: str, agent_id: str = None) -> int:
     """从关键词索引中删除指定文档的所有条目
 
@@ -208,7 +301,7 @@ def _delete_from_keyword_index(filename: str, agent_id: str = None) -> int:
         # [性能优化 1] BM25 缓存失效：索引变更后清除缓存
         cache_key = agent_id or "__global__"
         if cache_key in _keyword_bm25_cache:
-            del _keyword_bm25_cache[cache_key]
+            _keyword_bm25_cache.pop(cache_key, None)
             logger.debug(f"[性能优化 1] BM25关键词索引缓存已失效: {cache_key}")
         logger.info(f"关键词索引已删除: {filename}, 删除 {deleted_count} 个条目")
 
@@ -267,8 +360,8 @@ def _search_keyword_index(query: str, top_k: int = 3, agent_id: str = None) -> l
 
                 # LRU 淘汰
                 while len(_keyword_bm25_cache) >= _KEYWORD_BM25_MAX_ENTRIES:
-                    oldest_key = min(_keyword_bm25_cache, key=lambda k: _keyword_bm25_cache[k].get("updated_at", 0))
-                    del _keyword_bm25_cache[oldest_key]
+                    oldest_key = _oldest_cache_key(_keyword_bm25_cache)
+                    _keyword_bm25_cache.pop(oldest_key, None)
 
                 _keyword_bm25_cache[cache_key] = {
                     "bm25": bm25,
@@ -547,7 +640,7 @@ def _get_vector_store_initialized(agent_id: str = None):
             # [性能修复] LRU淘汰：超过上限时移除最早的缓存
             while len(_vector_store_cache) > _VECTOR_STORE_CACHE_MAX_SIZE:
                 oldest_key = next(iter(_vector_store_cache))
-                del _vector_store_cache[oldest_key]
+                _vector_store_cache.pop(oldest_key, None)
                 logger.info(f"[性能修复] 向量存储缓存淘汰: {oldest_key}")
         except Exception as e:
             logger.error(f"ChromaDB 连接失败: {e}")
@@ -567,7 +660,7 @@ def _get_vector_store_initialized(agent_id: str = None):
                 # [性能修复] LRU淘汰
                 while len(_vector_store_cache) > _VECTOR_STORE_CACHE_MAX_SIZE:
                     oldest_key = next(iter(_vector_store_cache))
-                    del _vector_store_cache[oldest_key]
+                    _vector_store_cache.pop(oldest_key, None)
             except Exception as e2:
                 logger.error(f"ChromaDB 连接失败(retry): {e2}")
                 if _is_embedding_error(e) or _is_embedding_error(e2):
@@ -590,7 +683,7 @@ def reset_vector_store():
     logger.info("向量数据库单例已重置，将重新检测 Embedding 可用性")
 
 
-@bounded_document_work
+@bounded_document_work(requires=lambda args: document_collection_resources(args, exclusive=True))
 def reindex_all_documents(agent_id: str = None):
     """重建指定知识库的所有文档索引（切换embedding模型后调用）
 
@@ -650,12 +743,12 @@ def reindex_all_documents(agent_id: str = None):
         # 2. 清除缓存
         cache_key = agent_id or "__global__"
         if cache_key in _vector_store_cache:
-            del _vector_store_cache[cache_key]
+            _vector_store_cache.pop(cache_key, None)
 
         # 3. 清除旧关键词索引
         keyword_index_path = _get_keyword_index_path(agent_id)
         if os.path.exists(keyword_index_path):
-            os.remove(keyword_index_path)
+            _clear_keyword_index(agent_id)
 
         # 4. 重新索引所有文档
         reindexed = []
@@ -1285,7 +1378,7 @@ def _load_image_as_document(file_path: str) -> list:
     return [Document(page_content=extracted_text, metadata={"source": file_path, "file_type": "image", "image_file": filename})]
 
 
-@bounded_document_work(lane='document-read')
+@bounded_document_work(lane='document-read', requires=lambda args: document_path_resources(args['file_path'], '4-disk', 'shared'))
 def load_document(file_path: str) -> list:
     """
     根据文件类型加载文档
@@ -1480,7 +1573,7 @@ def split_documents(docs: list, chunk_size: int = 800, chunk_overlap: int = 200,
     return clean_chunks
 
 
-@bounded_document_work
+@bounded_document_work(requires=document_mutation_resources)
 def index_document(file_path: str, filename: str = None, agent_id: str = None) -> dict:
     """
     完整的文档索引流程：加载 → 分块 → 索引存储
@@ -1559,7 +1652,7 @@ def index_document(file_path: str, filename: str = None, agent_id: str = None) -
             end = min(start + EMBEDDING_BATCH_SIZE, total_chunks)
             batch = chunks[start:end]
             try:
-                vector_store.add_documents(batch)
+                _store_embedding_batch(vector_store, batch, agent_id)
             except Exception as e:
                 error_str = str(e)
 
@@ -1573,13 +1666,7 @@ def index_document(file_path: str, filename: str = None, agent_id: str = None) -
 
                     # 尝试回滚已写入该文档的数据
                     try:
-                        collection = vector_store._collection
-                        existing = collection.get(
-                            where={"source_file": filename},
-                            include=["metadatas"],
-                        )
-                        if existing.get("ids"):
-                            collection.delete(ids=existing["ids"])
+                        _delete_vector_chunks(vector_store, filename, agent_id)
                     except Exception:
                         pass
 
@@ -1599,13 +1686,7 @@ def index_document(file_path: str, filename: str = None, agent_id: str = None) -
 
                     # 回滚已写入的数据
                     try:
-                        collection = vector_store._collection
-                        existing = collection.get(
-                            where={"source_file": filename},
-                            include=["metadatas"],
-                        )
-                        if existing.get("ids"):
-                            collection.delete(ids=existing["ids"])
+                        _delete_vector_chunks(vector_store, filename, agent_id)
                     except Exception:
                         pass
 
@@ -1630,7 +1711,7 @@ def index_document(file_path: str, filename: str = None, agent_id: str = None) -
         # 清除BM25缓存（新文档索引后，旧缓存不再完整）
         cache_key = agent_id or "__global__"
         if cache_key in _bm25_doc_cache:
-            del _bm25_doc_cache[cache_key]
+            _bm25_doc_cache.pop(cache_key, None)
 
         # [P1-4 修复] 镜像写入 keyword_index.json，保证降级路径随时可用。
         # 旧逻辑：仅在 embedding 不可用时才写 keyword_index.json。结果一旦
@@ -1784,8 +1865,8 @@ def _build_bm25_index(agent_id: str = None) -> dict:
     _bm25_index_cache[cache_key] = index_data
     # [性能修复] LRU 淘汰：超过最大条目数时，移除最久未更新的条目
     while len(_bm25_index_cache) > _BM25_INDEX_MAX_ENTRIES:
-        oldest_key = min(_bm25_index_cache, key=lambda k: _bm25_index_cache[k]["updated_at"])
-        del _bm25_index_cache[oldest_key]
+        oldest_key = _oldest_cache_key(_bm25_index_cache)
+        _bm25_index_cache.pop(oldest_key, None)
         logger.info(f"[#12] BM25 索引缓存 LRU 淘汰: {oldest_key}")
     logger.info(f"[#12] BM25 索引已构建: cache_key={cache_key}, 文档数={len(corpus)}")
     return index_data
@@ -1817,8 +1898,8 @@ def _get_all_docs_cached(agent_id: str = None) -> dict:
         _bm25_doc_cache[cache_key] = {"data": all_docs, "updated_at": now}
         # [性能修复] LRU 淘汰：超过最大条目数时，移除最久未更新的条目
         while len(_bm25_doc_cache) > _BM25_DOC_MAX_ENTRIES:
-            oldest_key = min(_bm25_doc_cache, key=lambda k: _bm25_doc_cache[k]["updated_at"])
-            del _bm25_doc_cache[oldest_key]
+            oldest_key = _oldest_cache_key(_bm25_doc_cache)
+            _bm25_doc_cache.pop(oldest_key, None)
         return all_docs
     except Exception as e:
         logger.warning(f"获取全量文档失败: {e}")
@@ -1834,10 +1915,10 @@ def _bm25_cache_invalidation(agent_id: str = None):
     cache_key = agent_id or "__global__"
     cleared = []
     if cache_key in _bm25_index_cache:
-        del _bm25_index_cache[cache_key]
+        _bm25_index_cache.pop(cache_key, None)
         cleared.append("rank_bm25索引")
     if cache_key in _bm25_doc_cache:
-        del _bm25_doc_cache[cache_key]
+        _bm25_doc_cache.pop(cache_key, None)
         cleared.append("全量文档缓存")
     if cleared:
         logger.info(f"BM25缓存已清除: {cache_key} ({', '.join(cleared)})")
@@ -1854,37 +1935,37 @@ def cleanup_bm25_caches():
     now = time.time()
     
     # 清理过期的 BM25 索引缓存
-    stale_index = [k for k, v in _bm25_index_cache.items()
+    stale_index = [k for k, v in _bm25_index_cache.copy().items()
                    if now - v.get("updated_at", 0) > _BM25_INDEX_TTL]
     for k in stale_index:
-        del _bm25_index_cache[k]
+        _bm25_index_cache.pop(k, None)
     
     # 清理过期的全量文档缓存
-    stale_doc = [k for k, v in _bm25_doc_cache.items()
+    stale_doc = [k for k, v in _bm25_doc_cache.copy().items()
                  if now - v.get("updated_at", 0) > _BM25_CACHE_TTL]
     for k in stale_doc:
-        del _bm25_doc_cache[k]
+        _bm25_doc_cache.pop(k, None)
     
     # 如果仍然超过最大条目数，淘汰最老的
     while len(_bm25_index_cache) > _BM25_INDEX_MAX_ENTRIES:
-        oldest = min(_bm25_index_cache, key=lambda k: _bm25_index_cache[k].get("updated_at", 0))
-        del _bm25_index_cache[oldest]
+        oldest = _oldest_cache_key(_bm25_index_cache)
+        _bm25_index_cache.pop(oldest, None)
         stale_index.append(oldest)
     
     while len(_bm25_doc_cache) > _BM25_DOC_MAX_ENTRIES:
-        oldest = min(_bm25_doc_cache, key=lambda k: _bm25_doc_cache[k].get("updated_at", 0))
-        del _bm25_doc_cache[oldest]
+        oldest = _oldest_cache_key(_bm25_doc_cache)
+        _bm25_doc_cache.pop(oldest, None)
         stale_doc.append(oldest)
     
     # [性能优化 1] 清理过期的关键词 BM25 缓存
-    stale_kw = [k for k, v in _keyword_bm25_cache.items()
+    stale_kw = [k for k, v in _keyword_bm25_cache.copy().items()
                 if now - v.get("updated_at", 0) > _KEYWORD_BM25_TTL]
     for k in stale_kw:
-        del _keyword_bm25_cache[k]
+        _keyword_bm25_cache.pop(k, None)
     
     while len(_keyword_bm25_cache) > _KEYWORD_BM25_MAX_ENTRIES:
-        oldest = min(_keyword_bm25_cache, key=lambda k: _keyword_bm25_cache[k].get("updated_at", 0))
-        del _keyword_bm25_cache[oldest]
+        oldest = _oldest_cache_key(_keyword_bm25_cache)
+        _keyword_bm25_cache.pop(oldest, None)
         stale_kw.append(oldest)
     
     total = len(stale_index) + len(stale_doc) + len(stale_kw)
@@ -2266,7 +2347,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
         logger.info(f"关键词模式检索: query='{query[:50]}...', agent_id={agent_id}")
         results = await asyncio.to_thread(_search_keyword_index, query, top_k=top_k, agent_id=agent_id)
         if not results:
-            results = await asyncio.to_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
+            results = await document_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
         return results
 
     # ===== [#13] 多查询检索：生成查询变体 =====
@@ -2282,7 +2363,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
         _embedding_degraded_at = time.time()
         results = await asyncio.to_thread(_search_keyword_index, query, top_k=top_k, agent_id=agent_id)
         if not results:
-            results = await asyncio.to_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
+            results = await document_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
         return results
 
     # --- 并行搜索：向量搜索 + BM25搜索同时执行 ---
@@ -2324,7 +2405,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
         logger.info(f"向量搜索过程中 Embedding 降级，切换为关键词检索")
         results = await asyncio.to_thread(_search_keyword_index, query, top_k=top_k, agent_id=agent_id)
         if not results:
-            results = await asyncio.to_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
+            results = await document_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
         return results
 
     # 解析搜索结果：奇数索引是向量搜索，偶数索引是BM25搜索
@@ -2380,7 +2461,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
     # 4. 兜底搜索
     if not fused_results:
         logger.info(f"向量+关键词均无结果，尝试磁盘文件搜索: query='{query[:50]}...'")
-        fused_results = await asyncio.to_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
+        fused_results = await document_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
 
     # 5. 上下文窗口增强
     formatted = await asyncio.to_thread(_expand_context_window, fused_results[:top_k], agent_id=agent_id)
@@ -2512,6 +2593,7 @@ def _expand_context_window(results: list[dict], agent_id: str = None, window_siz
     return expanded_results
 
 
+@bounded_document_work(lane='document-read')
 def _search_disk_files(query: str, top_k: int = 3, agent_id: str = None) -> list[dict]:
     """[#11] 磁盘文件全文搜索（关键词索引的补充）
 
@@ -2572,6 +2654,7 @@ def _search_disk_files(query: str, top_k: int = 3, agent_id: str = None) -> list
     return scored[:top_k]
 
 
+@bounded_document_work(lane='document-read')
 def get_document_content(filename: str, agent_id: str = None) -> dict:
     """获取知识库中指定文档的完整内容（从磁盘原始文件读取，不依赖向量搜索）
 
@@ -2683,7 +2766,7 @@ def list_indexed_documents(agent_id: str = None) -> list[str]:
     return sorted(list(sources))
 
 
-@bounded_document_work
+@bounded_document_work(requires=document_mutation_resources)
 def update_document(filename: str, new_content: str, agent_id: str = None, async_reindex: bool = False) -> dict:
     """
     修改知识库中已有文档的内容
@@ -2722,15 +2805,7 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
     vector_store = get_vector_store(agent_id=agent_id)
     if vector_store is not None:
         try:
-            collection = vector_store._collection
-            results = collection.get(
-                where={"source_file": filename},
-                include=["metadatas"],
-            )
-            chunk_ids = results.get("ids", [])
-            if chunk_ids:
-                collection.delete(ids=chunk_ids)
-                chunks_deleted = len(chunk_ids)
+            chunks_deleted = _delete_vector_chunks(vector_store, filename, agent_id)
         except Exception as e:
             logger.warning(f"删除旧向量分块时出错: {e}")
 
@@ -2741,34 +2816,36 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
     # 清除BM25缓存（文档内容已变更，旧缓存失效）
     cache_key = agent_id or "__global__"
     if cache_key in _bm25_doc_cache:
-        del _bm25_doc_cache[cache_key]
+        _bm25_doc_cache.pop(cache_key, None)
 
-    # 3. 用新内容覆盖原文件
+    # 3. Hold only local file I/O against readers, not the later cloud indexing.
     try:
-        ext = os.path.splitext(filename)[1].lower()
-        if ext == ".txt":
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-        elif ext == ".docx":
-            try:
-                from docx import Document as DocxDocument
-                doc = DocxDocument()
-                for line in new_content.split("\n"):
-                    doc.add_paragraph(line)
-                doc.save(file_path)
-            except ImportError:
+        with get_runtime_limits().locked(document_path_resources(file_path, '4-disk', 'exclusive') +
+                                        document_path_resources(file_path.rsplit('.', 1)[0] + '.txt', '4-disk', 'exclusive')):
+            ext = os.path.splitext(filename)[1].lower()
+            if ext == ".txt":
                 with open(file_path, "w", encoding="utf-8") as f:
                     f.write(new_content)
-        elif ext == ".pdf":
-            txt_path = file_path.rsplit('.', 1)[0] + '.txt'
-            with open(txt_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
-            os.remove(file_path)
-            filename = filename.rsplit('.', 1)[0] + '.txt'
-            file_path = txt_path
-        else:
-            with open(file_path, "w", encoding="utf-8") as f:
-                f.write(new_content)
+            elif ext == ".docx":
+                try:
+                    from docx import Document as DocxDocument
+                    doc = DocxDocument()
+                    for line in new_content.split("\n"):
+                        doc.add_paragraph(line)
+                    doc.save(file_path)
+                except ImportError:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write(new_content)
+            elif ext == ".pdf":
+                txt_path = file_path.rsplit('.', 1)[0] + '.txt'
+                with open(txt_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                os.remove(file_path)
+                filename = filename.rsplit('.', 1)[0] + '.txt'
+                file_path = txt_path
+            else:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
     except Exception as e:
         return {
             "filename": filename,
@@ -2820,7 +2897,7 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
         }
 
 
-@bounded_document_work
+@bounded_document_work(requires=document_mutation_resources)
 def delete_document(filename: str, agent_id: str = None) -> dict:
     """
     从知识库中删除指定文档
@@ -2842,16 +2919,9 @@ def delete_document(filename: str, agent_id: str = None) -> dict:
     vector_store = get_vector_store(agent_id=agent_id)
     if vector_store is not None:
         try:
-            collection = vector_store._collection
-            results = collection.get(
-                where={"source_file": filename},
-                include=["metadatas"],
-            )
-            chunk_ids = results.get("ids", [])
-            if chunk_ids:
+            chunks_deleted = _delete_vector_chunks(vector_store, filename, agent_id)
+            if chunks_deleted:
                 found_in_any = True
-                collection.delete(ids=chunk_ids)
-                chunks_deleted = len(chunk_ids)
         except Exception as e:
             logger.warning(f"从 ChromaDB 删除失败: {e}")
 
@@ -2864,7 +2934,7 @@ def delete_document(filename: str, agent_id: str = None) -> dict:
     # 清除BM25缓存（文档已删除，旧缓存失效）
     cache_key = agent_id or "__global__"
     if cache_key in _bm25_doc_cache:
-        del _bm25_doc_cache[cache_key]
+        _bm25_doc_cache.pop(cache_key, None)
 
     # 3. 删除原始文件（查找可能的位置）
     file_deleted = False
@@ -2877,7 +2947,7 @@ def delete_document(filename: str, agent_id: str = None) -> dict:
     for file_path in possible_paths:
         if os.path.exists(file_path):
             try:
-                os.remove(file_path)
+                _remove_document_file(file_path)
                 file_deleted = True
                 found_in_any = True
                 break
@@ -2908,7 +2978,7 @@ def delete_document(filename: str, agent_id: str = None) -> dict:
     }
 
 
-@bounded_document_work
+@bounded_document_work(requires=lambda args: document_collection_resources(args, exclusive=True))
 def delete_agent_collection(agent_id: str) -> dict:
     """删除智能体的整个知识库 collection
 
@@ -2944,14 +3014,14 @@ def delete_agent_collection(agent_id: str) -> dict:
         # 2. 清理缓存
         cache_key = agent_id or "__global__"
         if cache_key in _vector_store_cache:
-            del _vector_store_cache[cache_key]
+            _vector_store_cache.pop(cache_key, None)
             cleanup_details.append("向量缓存")
 
         # 3. 删除关键词索引文件
         keyword_index_path = _get_keyword_index_path(agent_id)
         if os.path.exists(keyword_index_path):
             try:
-                os.remove(keyword_index_path)
+                _clear_keyword_index(agent_id)
                 logger.info(f"已删除智能体关键词索引: {keyword_index_path}")
                 cleanup_details.append("关键词索引")
             except Exception as e:
