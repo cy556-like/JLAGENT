@@ -1,0 +1,94 @@
+/* Mobile-only overrides. Desktop layout and chat/model logic stay unchanged. */
+.mobile-sidebar-toggle { display: none; }
+
+@media (max-width: 768px) {
+    html, body { width: 100%; max-width: 100%; }
+    #chatPage, .login-fullscreen, .sidebar {
+        height: 100vh;
+        height: var(--jl-mobile-height, 100dvh);
+    }
+    .chat-main, .chat-content, .chat-messages, .kb-page { min-height: 0; }
+
+    /* The desktop login uses a 60px offset and an elevated illustration. */
+    #loginModal { overflow-y: auto; overscroll-behavior: contain; }
+    .login-fullscreen { overflow-y: auto; overflow-x: hidden; }
+    .login-top-bar {
+        height: auto;
+        min-height: 56px;
+        padding: 12px max(16px, env(safe-area-inset-left));
+    }
+    .login-top-bar-brand { font-size: 16px; line-height: 1.45; letter-spacing: 0; }
+    .login-main-area { flex: 1 0 auto; width: 100%; padding: 24px 16px; gap: 0; }
+    .login-left-panel { display: none; }
+    .login-right-panel { width: 100%; max-width: 380px; margin: 0; }
+    .login-form-card {
+        width: 100%; max-width: 100%; padding: 28px 24px;
+        border-radius: 16px; background: var(--bg-primary);
+        box-shadow: 0 12px 36px rgba(0, 0, 0, .16);
+    }
+    .login-form-header h3 { color: var(--text-primary); text-shadow: none; }
+    .login-subtitle { color: var(--text-secondary); text-shadow: none; }
+    .login-modal-body .form-group input { font-size: 16px; min-height: 48px; }
+    .btn-login { min-height: 48px; font-size: 16px; }
+    .login-footer-bar {
+        height: auto; flex-direction: column; gap: 6px;
+        padding: 12px 16px max(12px, env(safe-area-inset-bottom));
+        text-align: center; line-height: 1.5;
+    }
+    .login-footer-contact { margin: 0; }
+
+    /* Keep every action reachable instead of squeezing a desktop toolbar. */
+    .chat-header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; flex-shrink: 0; }
+    .header-title-group { flex: 1 1 100%; width: 100%; gap: 8px; }
+    .header-title-group h1 { flex: 1; }
+    .mobile-sidebar-toggle {
+        display: inline-flex; align-items: center; justify-content: center;
+        flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px;
+        border: 1px solid var(--border); background: var(--bg-primary);
+        color: var(--text-primary); font-size: 22px; cursor: pointer;
+    }
+    .chat-header .header-actions { width: 100%; flex-wrap: wrap; gap: 6px; margin: 0; }
+    .model-select { flex: 1 1 100px; min-width: 0; max-width: 200px; min-height: 40px; }
+    .header-btn, .header-kb-btn, .header-logout-btn { min-height: 40px; }
+    .header-user-info { margin-left: auto; padding-left: 6px; gap: 5px; }
+    .header-user-name { max-width: 76px; overflow: hidden; text-overflow: ellipsis; }
+    .header-user-avatar { display: none; }
+    .sidebar, .sidebar.collapsed {
+        position: fixed; top: 0; left: -290px;
+        width: min(280px, 86vw); min-width: 0; z-index: 999;
+    }
+    .sidebar.mobile-open { left: 0; }
+    .sidebar-overlay { z-index: 998; }
+    .help-popover { left: 0; right: auto; max-width: calc(100vw - 24px); }
+    .skills-dropdown { max-height: 60dvh; overflow-y: auto; max-width: calc(100vw - 24px); }
+    .chat-content.centered, .chat-content.centered.zheng-welcome-active {
+        justify-content: flex-start; overflow: hidden; padding-top: 0;
+    }
+    .chat-content.centered .welcome-center {
+        flex: 1 1 auto; min-height: 0; width: 100%; margin: 0 auto;
+        padding-top: 16px; overflow-y: auto; overscroll-behavior: contain;
+    }
+    .chat-content.centered .chat-input-area { margin-top: 0; }
+    .chat-input-area, .chat-content.centered .chat-input-area {
+        max-width: 100%; padding: 10px 12px max(10px, env(safe-area-inset-bottom));
+    }
+    .input-top textarea { font-size: 16px; }
+    .chat-messages { padding: 12px; overflow-x: hidden; }
+    .message .bubble { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
+    .bubble pre { max-width: 100%; overflow-x: auto; }
+    .bubble table { display: block; max-width: 100%; overflow-x: auto; }
+    .modal { width: calc(100vw - 24px); max-height: 85dvh; padding: 18px; }
+    .kb-stats-row { flex-wrap: wrap; }
+    .kb-stat-card { min-width: 0; flex: 1 1 110px; }
+    .kb-doc-item .doc-name, .kb-doc-name { min-width: 0; overflow-wrap: anywhere; }
+    .zheng-profile-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .zheng-profile-tab { min-height: 44px; white-space: normal; }
+    .zheng-wechat-image { max-width: 100%; height: auto; }
+}
+
+@media (max-width: 360px) {
+    .header-user-name { max-width: 52px; }
+    .header-btn { padding: 6px; }
+    .chat-header .header-actions { gap: 4px; }
+    .login-form-card { padding: 24px 18px; }
+}

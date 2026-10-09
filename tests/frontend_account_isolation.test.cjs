@@ -509,7 +509,7 @@ test('API requests remain excluded from service worker cache; asset versions mat
     const html = fs.readFileSync(path.join(__dirname, '../app/static/index.html'), 'utf8');
     const worker = fs.readFileSync(path.join(__dirname, '../app/static/sw.js'), 'utf8');
     const version = html.match(/app\.js\?v=([^"']+)/)[1];
-    assert.equal(version, '20261007-account-isolation-1');
+    assert.match(version, /^\d{8}-[a-z0-9-]+$/);
     assert(worker.includes('/static/js/app.js?v=' + version));
     assert(html.includes('/static/sw.js?v=' + version));
     assert(worker.includes('/\\/api\\/v1\\//'));

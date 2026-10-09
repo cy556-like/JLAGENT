@@ -10,7 +10,7 @@
     <meta charset="UTF-8">
 
 
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content">
 
 
     <title>贵阳吉利汽车 质量改进/精益 智能体</title>
@@ -62,6 +62,7 @@
 
 
     <link rel="stylesheet" href="/static/css/style.css?v=20260724b">
+    <link rel="stylesheet" href="/static/css/mobile.css?v=20261009-mobile-1">
 
 
 </head>
@@ -254,6 +255,7 @@
 
 
             <div class="header-title-group">
+                <button class="mobile-sidebar-toggle" type="button" onclick="toggleSidebar()" aria-label="打开智能体和历史对话">☰</button>
 
 
                 <h1 id="chatTitle">质量改进/精益 智能体</h1>
@@ -551,7 +553,7 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
 
 
-        navigator.serviceWorker.register('/static/sw.js?v=20261009-zheng-wechat').then(function(reg) {
+        navigator.serviceWorker.register('/static/sw.js?v=20261009-mobile-1').then(function(reg) {
 
 
             console.log('SW registered:', reg.scope);
@@ -656,7 +658,8 @@ function toggleFaq(el) {
 </script>
 
 
-<script src="/static/js/app.js?v=20261009-zheng-wechat"></script>
+<script src="/static/js/app.js?v=20261009-mobile-1"></script>
+<script src="/static/js/mobile.js?v=20261009-mobile-1"></script>
 
 
 </body>
