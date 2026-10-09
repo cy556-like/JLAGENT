@@ -53,6 +53,8 @@ from fastapi.responses import RedirectResponse, FileResponse, JSONResponse
 
 from app.config import settings
 from app.api.routes import router
+from app.utils.resource_guard import ResourceGuardMiddleware, get_runtime_limits
+from app.auth.jwt_handler import get_username_from_token
 
 # ===== [#25] 优雅关闭状态 =====
 _shutdown_requested = False
@@ -158,6 +160,8 @@ def create_app() -> FastAPI:
         version="4.0.0",
     )
 
+    app.add_middleware(ResourceGuardMiddleware, limits=get_runtime_limits(), user_resolver=get_username_from_token)
+
     # CORS 跨域支持
     # [BUG FIX] allow_origins=["*"] + allow_credentials=True 在浏览器规范中无效，
     # 浏览器会拒绝发送带凭据的请求（credentials 模式下不允许通配符 origin）
@@ -253,6 +257,7 @@ def create_app() -> FastAPI:
             "version": "4.0.0",
             "active_connections": _active_connections,
             "memory": mem_info,
+            "resource_limits": get_runtime_limits().snapshot(),
         }
 
     # [#25] 优雅关闭：处理 SIGTERM / SIGINT

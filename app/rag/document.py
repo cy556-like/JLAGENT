@@ -21,6 +21,7 @@ import logging
 import asyncio
 from typing import Optional
 import time
+import threading
 
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
@@ -44,6 +45,7 @@ except ImportError:
     _JIEBA_AVAILABLE = False
 
 from app.config import settings
+from app.utils.resource_guard import bounded_document_work, background_indexes
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,7 @@ EMBEDDING_BATCH_SIZE = 50  # 智谱 embedding-3 API 单次最多64条，留余�
 # ===== 单例模式：复用 Embedding 和 ChromaDB 连接 =====
 _embeddings_instance = None
 _vector_store_cache = {}  # agent_id -> ChromaDB instance（按智能体隔离）
+_vector_store_init_lock = threading.RLock()
 
 # [性能修复] 向量存储缓存上限，避免长时间运行后内存无限增长
 _VECTOR_STORE_CACHE_MAX_SIZE = 20
@@ -473,6 +476,16 @@ def _get_collection_name(agent_id: str = None) -> str:
 
 
 def get_vector_store(agent_id: str = None):
+    # Cache hits remain lock-free; only cold initialization is serialized.
+    if _embedding_available is not False:
+        cached = _vector_store_cache.get(agent_id or '__global__')
+        if cached is not None:
+            return cached
+    with _vector_store_init_lock:
+        return _get_vector_store_initialized(agent_id)
+
+
+def _get_vector_store_initialized(agent_id: str = None):
     """获取 ChromaDB 向量数据库实例（按 agent_id 隔离）
 
     Args:
@@ -577,6 +590,7 @@ def reset_vector_store():
     logger.info("向量数据库单例已重置，将重新检测 Embedding 可用性")
 
 
+@bounded_document_work
 def reindex_all_documents(agent_id: str = None):
     """重建指定知识库的所有文档索引（切换embedding模型后调用）
 
@@ -1271,6 +1285,7 @@ def _load_image_as_document(file_path: str) -> list:
     return [Document(page_content=extracted_text, metadata={"source": file_path, "file_type": "image", "image_file": filename})]
 
 
+@bounded_document_work(lane='document-read')
 def load_document(file_path: str) -> list:
     """
     根据文件类型加载文档
@@ -1465,6 +1480,7 @@ def split_documents(docs: list, chunk_size: int = 800, chunk_overlap: int = 200,
     return clean_chunks
 
 
+@bounded_document_work
 def index_document(file_path: str, filename: str = None, agent_id: str = None) -> dict:
     """
     完整的文档索引流程：加载 → 分块 → 索引存储
@@ -2259,7 +2275,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
         logger.info(f"异步多查询检索: {queries}")
 
     # ===== 向量模式：混合检索（并行优化） =====
-    vector_store = get_vector_store(agent_id=agent_id)
+    vector_store = await asyncio.to_thread(get_vector_store, agent_id=agent_id)
 
     if vector_store is None:
         _embedding_available = False
@@ -2367,7 +2383,7 @@ async def search_documents_async(query: str, top_k: int = 3, agent_id: str = Non
         fused_results = await asyncio.to_thread(_search_disk_files, query, top_k=top_k, agent_id=agent_id)
 
     # 5. 上下文窗口增强
-    formatted = _expand_context_window(fused_results[:top_k], agent_id=agent_id)
+    formatted = await asyncio.to_thread(_expand_context_window, fused_results[:top_k], agent_id=agent_id)
 
     return formatted
 
@@ -2667,6 +2683,7 @@ def list_indexed_documents(agent_id: str = None) -> list[str]:
     return sorted(list(sources))
 
 
+@bounded_document_work
 def update_document(filename: str, new_content: str, agent_id: str = None, async_reindex: bool = False) -> dict:
     """
     修改知识库中已有文档的内容
@@ -2761,7 +2778,6 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
 
     # 4. 重新索引
     if async_reindex:
-        import threading
         def _background_reindex(fp, fn, aid):
             try:
                 index_result = index_document(fp, fn, agent_id=aid)
@@ -2769,18 +2785,19 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
             except Exception as e:
                 logger.error(f"后台重索引失败: {fn}, {e}")
 
-        thread = threading.Thread(target=_background_reindex, args=(file_path, filename, agent_id), daemon=True)
-        thread.start()
-
-        return {
-            "filename": filename,
-            "status": "success",
-            "chunks_deleted": chunks_deleted,
-            "keyword_entries_deleted": keyword_deleted,
-            "chunks_indexed": "后台索引中",
-            "message": f"文档 {filename} 已成功修改（删除 {chunks_deleted} 个向量分块 + {keyword_deleted} 个关键词条目，新内容正在后台索引中）",
-        }
-    else:
+        queued = background_indexes.submit((os.path.abspath(file_path), agent_id),
+                                           _background_reindex, file_path, filename, agent_id)
+        if queued:
+            return {
+                "filename": filename,
+                "status": "success",
+                "chunks_deleted": chunks_deleted,
+                "keyword_entries_deleted": keyword_deleted,
+                "chunks_indexed": "后台索引中",
+                "message": f"文档 {filename} 已成功修改（删除 {chunks_deleted} 个向量分块 + {keyword_deleted} 个关键词条目，新内容正在后台索引中）",
+            }
+        # The bounded queue is full: use the normal synchronous result/error path.
+    if not async_reindex or not queued:
         try:
             index_result = index_document(file_path, filename, agent_id=agent_id)
         except Exception as e:
@@ -2803,6 +2820,7 @@ def update_document(filename: str, new_content: str, agent_id: str = None, async
         }
 
 
+@bounded_document_work
 def delete_document(filename: str, agent_id: str = None) -> dict:
     """
     从知识库中删除指定文档
@@ -2890,6 +2908,7 @@ def delete_document(filename: str, agent_id: str = None) -> dict:
     }
 
 
+@bounded_document_work
 def delete_agent_collection(agent_id: str) -> dict:
     """删除智能体的整个知识库 collection
 
@@ -2975,6 +2994,7 @@ def _get_export_dir(session_id: str = "") -> str:
     return export_dir
 
 
+@bounded_document_work(lane='document-export')
 def export_document_as_docx(content: str, filename: str, title: str = "", session_id: str = "") -> dict:
     """
     将文本内容导出为 .docx 文件，保存到专用导出目录，供用户下载
@@ -3259,6 +3279,7 @@ def export_document_as_docx(content: str, filename: str, title: str = "", sessio
         }
 
 
+@bounded_document_work(lane='document-export')
 def export_document_as_xlsx(content: str, filename: str, title: str = "", session_id: str = "") -> dict:
     """将文本内容导出为 .xlsx 文件，保存到专用导出目录，供用户下载
     

@@ -437,6 +437,7 @@ class APITests(IsolatedSource):
             async for item in factory():
                 yield 'data: ' + json.dumps(item) + '\n\n'
         self.scope = dict(self.cfg.__dict__, BaseModel=BaseModel, asyncio=asyncio, Depends=Depends,
+                          document_thread=load_module('_resource_guard_account_tests', 'app/utils/resource_guard.py').document_thread,
                           HTTPException=HTTPException, Request=Request, UploadFile=UploadFile, File=File,
                           Form=Form, StreamingResponse=StreamingResponse, router=APIRouter(),
                           get_username_from_token=lambda token: token if token in ('admin', 'quanzhiadmin') else None,

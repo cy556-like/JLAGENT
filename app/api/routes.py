@@ -49,6 +49,14 @@ from urllib.parse import unquote
 
 
 from app.agent.core import chat, chat_stream_generator, chat_stream_generator_multimodal, reset_agent
+from app.utils.resource_guard import SSE_BUFFER_EVENTS, document_thread, bounded_document_work
+
+
+@bounded_document_work
+def _save_uploaded_bytes(file_path, content):
+    # Called in a worker thread; a slow disk must not block every active SSE.
+    with open(file_path, 'wb') as target:
+        target.write(content)
 
 
 # [BUG FIX v5] 可复用的 SSE 流式包装器：客户端断开时真正取消 Agent 执行
@@ -68,7 +76,8 @@ async def _sse_stream_wrapper(
     [v6 优化] 去掉内层 create_task + sleep 轮询，改用 asyncio.wait_for(queue.get, timeout=0.5)
     避免每个 SSE 连接每次消费创建 throwaway task + 50ms 忙等待
     """
-    queue = asyncio.Queue()
+    # Slow mobile clients must not accumulate an entire long answer in memory.
+    queue = asyncio.Queue(maxsize=SSE_BUFFER_EVENTS)
     stream_done = object()
     cancelled_by_client = False
     # Kimi FMEA 非流式处理期间可能几十秒没有正文事件。
@@ -78,8 +87,10 @@ async def _sse_stream_wrapper(
     
     async def produce():
         nonlocal cancelled_by_client
+        iterator = None
         try:
-            async for chunk in generator_factory():
+            iterator = generator_factory()
+            async for chunk in iterator:
                 if await request.is_disconnected():
                     cancelled_by_client = True
                     logger.info(f"SSE客户端断开，正在终止Agent执行: session={session_id}")
@@ -93,6 +104,11 @@ async def _sse_stream_wrapper(
             logger.exception(f"SSE生产者异常: session={session_id}")
             await queue.put({'type': 'error', 'content': str(e)})
             await queue.put(stream_done)
+        finally:
+            # Cancellation may happen at queue.put(), outside the model iterator.
+            # Close it explicitly rather than leaving cleanup to async-generator GC.
+            if iterator is not None and hasattr(iterator, 'aclose'):
+                await iterator.aclose()
     
     producer_task = asyncio.create_task(produce())
     
@@ -138,6 +154,11 @@ async def _sse_stream_wrapper(
     finally:
         if not producer_task.done():
             producer_task.cancel()
+        # Await cancellation even when the producer was blocked on a full queue.
+        try:
+            await producer_task
+        except asyncio.CancelledError:
+            pass
     
     # 更新会话时间
     try:
@@ -976,15 +997,13 @@ async def chat_with_file_stream(
 
     # 文件大小检查
 
-    file_content_raw = await file.read()
+    file_content_raw = await file.read(MAX_FILE_SIZE + 1)
 
     if len(file_content_raw) > MAX_FILE_SIZE:
 
         raise HTTPException(status_code=413, detail=f"文件大小超过限制（最大 50MB），当前文件: {len(file_content_raw) // 1024 // 1024}MB")
 
-    # 重置文件指针
-
-    await file.seek(0)
+    # 后续复用已校验的读取结果，避免再次分配整个文件的内存。
 
 
 
@@ -1082,9 +1101,8 @@ async def chat_with_file_stream(
 
             file_path = os.path.join(temp_dir, decoded_filename)
 
-        with open(file_path, "wb") as f:
-
-            shutil.copyfileobj(file.file, f)
+        await document_thread(_save_uploaded_bytes, file_path, file_content_raw)
+        del file_content_raw
 
 
 
@@ -1094,7 +1112,7 @@ async def chat_with_file_stream(
 
             try:
 
-                index_result = await asyncio.to_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
+                index_result = await document_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
 
                 indexing_mode = index_result.get('indexing_mode', 'unknown')
 
@@ -1114,7 +1132,7 @@ async def chat_with_file_stream(
 
             try:
 
-                docs = await asyncio.to_thread(load_document, file_path)
+                docs = await document_thread(load_document, file_path)
 
                 text = "\n".join([doc.page_content for doc in docs])
 
@@ -1138,9 +1156,7 @@ async def chat_with_file_stream(
 
         try:
 
-            file_content = await file.read()
-
-            text = file_content.decode("utf-8", errors="replace")
+            text = file_content_raw.decode("utf-8", errors="replace")
 
             full_message = f"[用户上传了文件: {file.filename}]\n\n文件内容：\n```\n{text[:8000]}\n```\n\n{message}"
 
@@ -1250,13 +1266,11 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
 
     # 文件大小检查
 
-    file_content_raw = await file.read()
+    file_content_raw = await file.read(MAX_FILE_SIZE + 1)
 
     if len(file_content_raw) > MAX_FILE_SIZE:
 
         raise HTTPException(status_code=413, detail=f"文件大小超过限制（最大 50MB）")
-
-    await file.seek(0)
 
 
 
@@ -1286,9 +1300,8 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
 
         file_path = os.path.join(settings.DOCUMENTS_DIR, decoded_filename)
 
-    with open(file_path, "wb") as f:
-
-        shutil.copyfileobj(file.file, f)
+    await document_thread(_save_uploaded_bytes, file_path, file_content_raw)
+    del file_content_raw
 
 
 
@@ -1300,7 +1313,7 @@ async def upload_document(file: UploadFile = File(...), agent_id: str = Form(Non
 
         # 避免文件加载+分块+Embedding API调用阻塞整个事件循环
 
-        result = await asyncio.to_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
+        result = await document_thread(index_document, file_path, decoded_filename, agent_id=agent_id)
 
         indexing_mode_result = result.get('indexing_mode', 'unknown')
 
@@ -1332,7 +1345,7 @@ async def search_api(req: SearchRequest, agent_id: str = Query(None, description
 
         return {"query": req.query, "results": [], "message": "普通聊天模式没有知识库，请先选择一个智能体"}
 
-    results = search_documents(req.query, req.top_k, agent_id=agent_id)
+    results = await asyncio.to_thread(search_documents, req.query, req.top_k, agent_id=agent_id)
 
     return {"query": req.query, "results": results}
 
@@ -1506,7 +1519,7 @@ async def get_document_stats(
     indexing_mode = "none"
     
     # 1. 从 ChromaDB 获取分块数
-    vector_store = get_vector_store(agent_id=agent_id)
+    vector_store = await asyncio.to_thread(get_vector_store, agent_id=agent_id)
     if vector_store is not None:
         try:
             collection = vector_store._collection
@@ -1591,7 +1604,7 @@ async def modify_document_api(filename: str, req: ModifyDocumentRequest):
 
             from app.rag.document import load_document
 
-            docs = await asyncio.to_thread(load_document, file_path)
+            docs = await document_thread(load_document, file_path)
 
             original_text = "\n".join([doc.page_content for doc in docs])
 
@@ -1607,7 +1620,7 @@ async def modify_document_api(filename: str, req: ModifyDocumentRequest):
 
 
 
-    result = update_document(filename, final_content, agent_id=req.agent_id, async_reindex=True)  # 异步重索引，加速响应
+    result = await document_thread(update_document, filename, final_content, agent_id=req.agent_id, async_reindex=True)
 
     if result["status"] == "not_found":
 
@@ -1631,7 +1644,7 @@ async def modify_document_api(filename: str, req: ModifyDocumentRequest):
 
             docx_filename = filename.rsplit('.', 1)[0] + '.docx'
 
-            docx_result = export_document_as_docx(final_content, docx_filename)
+            docx_result = await document_thread(export_document_as_docx, final_content, docx_filename)
 
             if docx_result["status"] == "success":
 
@@ -1763,7 +1776,7 @@ async def export_document_api(req: ExportDocumentRequest):
 
 
 
-        result = export_document_as_docx(req.content, filename, title=req.title)
+        result = await document_thread(export_document_as_docx, req.content, filename, title=req.title)
 
         if result["status"] == "success":
 
@@ -1833,7 +1846,7 @@ async def export_xlsx_api(req: ExportXlsxRequest):
 
 
 
-        result = export_document_as_xlsx(req.content, filename, title=req.title)
+        result = await document_thread(export_document_as_xlsx, req.content, filename, title=req.title)
 
         if result["status"] == "success":
 
@@ -2137,7 +2150,7 @@ async def delete_document_api(filename: str, agent_id: str = Query(None, descrip
 
     ensure_kb_delete_permission(username, agent_id)
 
-    result = delete_document(filename, agent_id=agent_id)
+    result = await document_thread(delete_document, filename, agent_id=agent_id)
 
     if result["status"] == "not_found":
 
@@ -2816,7 +2829,7 @@ async def health_detailed():
 
             from app.rag.document import get_vector_store
 
-            vs = get_vector_store()
+            vs = await asyncio.to_thread(get_vector_store)
 
             if vs is not None:
 
@@ -2852,7 +2865,7 @@ async def health_detailed():
 
         api_url = settings.LLM_BASE_URL.rstrip("/") + "/models"
 
-        resp = httpx.get(api_url, timeout=5)
+        resp = await asyncio.to_thread(httpx.get, api_url, timeout=5)
 
         if resp.status_code == 200:
 
@@ -3076,7 +3089,7 @@ async def delete_agent_knowledge(agent_id: str, username: str = Depends(require_
 
     ensure_kb_delete_permission(username, agent_id)
 
-    result = delete_agent_collection(agent_id)
+    result = await document_thread(delete_agent_collection, agent_id)
 
     if result["status"] == "error":
 
@@ -3094,7 +3107,7 @@ async def delete_agent_knowledge(agent_id: str, username: str = Depends(require_
 
 @router.get("/debug/collections", summary="列出所有 ChromaDB collection")
 
-async def debug_collections():
+def debug_collections():
 
     """诊断接口：列出所有 ChromaDB collection 及其文档数"""
 
@@ -3132,7 +3145,7 @@ async def reindex_knowledge(agent_id: str = Query(None, description="智能体ID
 
     """
 
-    result = await asyncio.to_thread(reindex_all_documents, agent_id=agent_id)
+    result = await document_thread(reindex_all_documents, agent_id=agent_id)
 
     if result["status"] == "error":
 
@@ -3146,7 +3159,8 @@ async def reindex_knowledge(agent_id: str = Query(None, description="智能体ID
 
 @router.get("/migrate/cleanup-collections", summary="清理异常的 ChromaDB collection")
 
-async def cleanup_collections():
+@bounded_document_work
+def cleanup_collections():
 
     """
 
