@@ -586,6 +586,14 @@ class SourceCoverageTests(unittest.TestCase):
         functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
         self.assertEqual(ast.unparse(functions['load_document'].decorator_list[0]),
                          "bounded_document_work(lane='document-read', requires=lambda args: document_path_resources(args['file_path'], '4-disk', 'shared'))")
+        self.assertEqual(ast.unparse(functions['search_documents'].decorator_list[0]),
+                         "bounded_document_work(lane='document-read')")
+        routes = ast.parse((ROOT / 'app/api/routes.py').read_text(encoding='utf-8-sig'))
+        search = next(node for node in routes.body if isinstance(node, ast.AsyncFunctionDef) and node.name == 'search_api')
+        self.assertTrue(any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and
+                            node.func.id == 'document_thread' and node.args and
+                            isinstance(node.args[0], ast.Name) and node.args[0].id == 'search_documents'
+                            for node in ast.walk(search)))
         for name in ('index_document', 'reindex_all_documents', 'update_document', 'delete_document',
                      'delete_agent_collection'):
             self.assertIn('requires=', ast.unparse(functions[name].decorator_list[0]))

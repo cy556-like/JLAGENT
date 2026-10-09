@@ -1360,7 +1360,7 @@ async def search_api(req: SearchRequest, agent_id: str = Query(None, description
 
         return {"query": req.query, "results": [], "message": "普通聊天模式没有知识库，请先选择一个智能体"}
 
-    results = await asyncio.to_thread(search_documents, req.query, req.top_k, agent_id=agent_id)
+    results = await document_thread(search_documents, req.query, req.top_k, agent_id=agent_id)
 
     return {"query": req.query, "results": results}
 

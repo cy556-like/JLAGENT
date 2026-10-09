@@ -2186,6 +2186,7 @@ def _generate_multi_queries(query: str) -> list[str]:
     
     return list(dict.fromkeys(queries))  # 去重保序
 
+@bounded_document_work(lane='document-read')
 def search_documents(query: str, top_k: int = 3, agent_id: str = None) -> list[dict]:
     """
     [#9] 混合检索：向量语义检索 + BM25关键词检索 + RRF融合
