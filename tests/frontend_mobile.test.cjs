@@ -14,7 +14,7 @@ function viewportHarness(width, height, legacy = false) {
     else query.addEventListener = (name, fn) => events.set(name, fn);
     const viewport = {height, scale: 1, addEventListener: (name, fn) => events.set('visual-' + name, fn)};
     const context = {
-        document: {documentElement: {style: {
+        document: {getElementById: () => null, documentElement: {style: {
             setProperty: (name, value) => styles.set(name, value),
             removeProperty: name => styles.delete(name),
         }}},

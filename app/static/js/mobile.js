@@ -20,3 +20,26 @@
     else mobile.addListener(schedule);
     updateHeight();
 })();
+
+/* Download is a normal public link, not an API call or a login action. */
+(() => {
+    const controls = document.getElementById('mobileApkDownload');
+    if (!controls) return;
+    const userAgent = navigator.userAgent || '';
+    // Start hidden in HTML to avoid a download-button flash while the app restores login.
+    if (/\bJLAGENTAndroid\//i.test(userAgent)) return;
+    controls.hidden = false; // CSS limits visibility to phone/tablet browsers.
+    const link = document.getElementById('apkDownloadLink');
+    const hint = document.getElementById('apkDownloadHint');
+    const close = document.getElementById('apkDownloadHintClose');
+    if (!link || !hint || !close) return;
+    link.addEventListener('click', event => {
+        if (!/MicroMessenger/i.test(userAgent)) return;
+        event.preventDefault();
+        hint.hidden = false;
+    });
+    close.addEventListener('click', () => { hint.hidden = true; });
+    link.addEventListener('keydown', event => {
+        if (event.key === 'Escape') hint.hidden = true;
+    });
+})();

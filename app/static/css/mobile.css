@@ -1,5 +1,7 @@
 /* Mobile-only overrides. Desktop layout and chat/model logic stay unchanged. */
 .mobile-sidebar-toggle { display: none; }
+.mobile-apk-download { display: none; }
+.mobile-apk-download[hidden], .apk-download-hint[hidden] { display: none !important; }
 
 @media (max-width: 768px) {
     html, body { width: 100%; max-width: 100%; }
@@ -36,6 +38,31 @@
         text-align: center; line-height: 1.5;
     }
     .login-footer-contact { margin: 0; }
+    /* A separate bottom-right row cannot cover login fields or the footer. */
+    .mobile-apk-download {
+        display: flex; justify-content: flex-end; position: relative;
+        flex: 0 0 auto; width: 100%; padding: 0 max(16px, env(safe-area-inset-right)) 16px;
+    }
+    .mobile-apk-download a {
+        display: inline-flex; align-items: center; gap: 8px;
+        min-height: 44px; padding: 10px 16px; border-radius: 10px;
+        color: #1051bf; background: #fff; border: 1px solid #cbdcf6;
+        text-decoration: none; font-size: 14px; font-weight: 600;
+        box-shadow: 0 3px 12px rgba(0, 0, 0, .12);
+    }
+    .mobile-apk-download a:focus-visible { outline: 3px solid #4a90e2; outline-offset: 3px; }
+    .apk-download-hint {
+        display: flex; align-items: flex-start; gap: 8px; position: absolute;
+        bottom: 100%; right: max(16px, env(safe-area-inset-right));
+        width: min(320px, calc(100vw - 32px)); padding: 12px;
+        color: #16263f; background: #fff; border: 1px solid #cbdcf6;
+        border-radius: 10px; box-shadow: 0 4px 20px rgba(0, 0, 0, .2);
+        font-size: 14px; line-height: 1.6; z-index: 1;
+    }
+    .apk-download-hint button {
+        flex: 0 0 36px; min-height: 36px; border: 0; border-radius: 6px;
+        background: #eff4fc; color: #16263f; font-size: 22px; cursor: pointer;
+    }
 
     /* Keep every action reachable instead of squeezing a desktop toolbar. */
     .chat-header { flex-wrap: wrap; padding: 8px 12px; gap: 8px; flex-shrink: 0; }

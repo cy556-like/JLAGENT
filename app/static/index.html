@@ -62,7 +62,7 @@
 
 
     <link rel="stylesheet" href="/static/css/style.css?v=20260724b">
-    <link rel="stylesheet" href="/static/css/mobile.css?v=20261009-app-session-1">
+    <link rel="stylesheet" href="/static/css/mobile.css?v=20261009-apk-download-1">
 
 
 </head>
@@ -190,6 +190,18 @@
 
         </div>
 
+
+        <!-- Mobile browser only; stays hidden inside the installed Android app. -->
+        <div class="mobile-apk-download" id="mobileApkDownload" hidden>
+            <div class="apk-download-hint" id="apkDownloadHint" role="status" hidden>
+                <span>微信内无法直接安装 APK。请点右上角“…”选择“在浏览器打开”，再点击下载。</span>
+                <button type="button" id="apkDownloadHintClose" aria-label="关闭下载提示">×</button>
+            </div>
+            <a id="apkDownloadLink" href="/static/downloads/JLAGENT-Android-1.2.0.apk" download="JLAGENT-Android-1.2.0.apk" aria-label="下载安卓 APK 安装包">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg>
+                下载 APK
+            </a>
+        </div>
 
         <!-- Bottom Footer Bar -->
 
@@ -553,7 +565,7 @@ if ('serviceWorker' in navigator) {
     window.addEventListener('load', function() {
 
 
-        navigator.serviceWorker.register('/static/sw.js?v=20261009-app-session-1').then(function(reg) {
+        navigator.serviceWorker.register('/static/sw.js?v=20261009-apk-download-1').then(function(reg) {
 
 
             console.log('SW registered:', reg.scope);
@@ -658,8 +670,8 @@ function toggleFaq(el) {
 </script>
 
 
-<script src="/static/js/app.js?v=20261009-app-session-1"></script>
-<script src="/static/js/mobile.js?v=20261009-app-session-1"></script>
+<script src="/static/js/app.js?v=20261009-apk-download-1"></script>
+<script src="/static/js/mobile.js?v=20261009-apk-download-1"></script>
 
 
 </body>

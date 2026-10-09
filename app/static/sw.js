@@ -4,17 +4,17 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-v1.1.7-app-session';
-const STATIC_CACHE = 'jlagent-static-v1.1.7-app-session';
+const CACHE_NAME = 'jlagent-v1.1.8-apk-download';
+const STATIC_CACHE = 'jlagent-static-v1.1.8-apk-download';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
     '/',
     '/static/css/style.css',
-    '/static/css/mobile.css?v=20261009-app-session-1',
-    '/static/js/mobile.js?v=20261009-app-session-1',
-    '/static/js/app.js?v=20261009-app-session-1',
+    '/static/css/mobile.css?v=20261009-apk-download-1',
+    '/static/js/mobile.js?v=20261009-apk-download-1',
+    '/static/js/app.js?v=20261009-apk-download-1',
     '/static/images/zheng-wei-wechat-20261009-v2.png',
     '/static/manifest.json',
     '/static/icons/icon-gy.svg',
@@ -27,6 +27,7 @@ const NO_CACHE_PATTERNS = [
     /\/api\/v1\//,         // API请求
     /\/stream/,             // 流式响应
     /\/upload/,             // 文件上传
+    /^\/static\/downloads\//, // APK 按需下载，不预缓存或拦截安装包
 ];
 
 // 安装事件 - 预缓存关键资源
