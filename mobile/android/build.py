@@ -27,6 +27,12 @@ def main():
     dex = build / 'dex'
     for folder in (classes, dex, key.parent, password.parent, output.parent):
         folder.mkdir(parents=True, exist_ok=True)
+    # Only remove generated compiler output inside this build directory.
+    for folder, pattern in ((classes, '*.class'), (dex, 'classes*.dex')):
+        assert folder.resolve().is_relative_to(build.resolve())
+        for stale in folder.rglob(pattern):
+            assert stale.resolve().is_relative_to(build.resolve())
+            stale.unlink()
 
     def executable(folder, name):
         return str(folder / (name + ('.exe' if os.name == 'nt' else '')))
@@ -43,7 +49,7 @@ def main():
     unsigned = build / 'unsigned.apk'
     aligned = build / 'aligned.apk'
     run([executable(tools, 'aapt'), 'package', '-f', '-M', str(source / 'AndroidManifest.xml'),
-         '-S', str(source / 'res'), '-I', str(platform), '-F', str(unsigned)])
+         '-S', str(source / 'res'), '-A', str(source / 'assets'), '-I', str(platform), '-F', str(unsigned)])
     with zipfile.ZipFile(unsigned, 'a', compression=zipfile.ZIP_DEFLATED) as archive:
         for path in sorted(dex.glob('classes*.dex')):
             archive.write(path, path.name)

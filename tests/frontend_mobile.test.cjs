@@ -78,13 +78,26 @@ test('mobile script has no network, token or account mutation paths', () => {
     const source = read('app/static/js/mobile.js');
     assert(!/fetch\(|XMLHttpRequest|localStorage|authToken|doLogin|doLogout/.test(source));
 });
-test('APK is fixed to supplied HTTPS site and has no credential or WebView bridge', () => {
+test('APK embeds supplied HTTPS site instead of launching a browser; bridge is origin-bound', () => {
     const source = read('mobile/android/src/com/cy556/jlagent/MainActivity.java');
+    const downloads = read('mobile/android/src/com/cy556/jlagent/EmbeddedDownloads.java');
     const manifest = read('mobile/android/AndroidManifest.xml');
-    assert(source.includes('https://47.114.99.132:8003/'));
-    assert(source.includes('extras.putBinder("android.support.customtabs.extra.SESSION", null)'));
-    assert(!/addJavascriptInterface|SslErrorHandler|\.proceed\(|getStringExtra|http:\/\//.test(source));
-    assert(!manifest.includes('<uses-permission'));
+    assert(source.includes('https://47.114.99.132:8003'));
+    assert(source.includes('web = new WebView(this)'));
+    assert(source.includes('web.loadUrl(SITE)'));
+    assert(source.includes('handler.cancel()'));
+    assert(source.includes('WebSettings.MIXED_CONTENT_NEVER_ALLOW'));
+    assert(source.includes('settings.setAllowFileAccess(false)'));
+    assert(source.includes('settings.setAllowContentAccess(false)'));
+    assert(!/addJavascriptInterface|\.proceed\(|Intent\.ACTION_VIEW|customtabs\.extra|getStringExtra|http:\/\//.test(source + downloads));
+    assert(downloads.includes('Uri.parse(MainActivity.ORIGIN)'));
+    assert(!downloads.includes('Uri.EMPTY)'));
+    assert(source.includes('Intent.ACTION_OPEN_DOCUMENT'));
+    assert(source.includes('Intent.ACTION_CREATE_DOCUMENT'));
+    assert.equal((manifest.match(/<uses-permission/g) || []).length, 1);
+    assert(manifest.includes('android.permission.INTERNET'));
+    assert(manifest.includes('android:versionCode="2"'));
+    assert(manifest.includes('android:windowSoftInputMode="adjustResize"'));
     assert(manifest.includes('android:debuggable="false"'));
     assert(manifest.includes('android:usesCleartextTraffic="false"'));
 });

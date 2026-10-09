@@ -4,76 +4,332 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Insets;
 import android.net.Uri;
+import android.net.http.SslError;
+import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
+import android.webkit.CookieManager;
+import android.webkit.DownloadListener;
+import android.webkit.RenderProcessGoneDetail;
+import android.webkit.SslErrorHandler;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebResourceResponse;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.Button;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
+import android.widget.Toast;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.ArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.json.JSONObject;
 
-/** A permission-free HTTPS launcher using the installed browser's Custom Tab. */
+/** A real in-app WebView. No browser/Custom Tab and no embedded credentials. */
 public final class MainActivity extends Activity {
-    private static final String SITE = "https://47.114.99.132:8003/";
-    private TextView hint;
+    static final String ORIGIN = "https://47.114.99.132:8003";
+    static final String SITE = ORIGIN + "/";
+    private static final int PICK_FILE = 10, SAVE_FILE = 11;
+    private FrameLayout root;
+    private WebView web;
+    private ProgressBar progress;
+    private LinearLayout errorPanel;
+    private TextView errorText;
+    private ValueCallback<Uri[]> upload;
+    private EmbeddedDownloads downloads;
+    private File pendingSave;
+    private final ExecutorService fileIO = Executors.newSingleThreadExecutor();
+    private String downloadScript;
+    private int navigation;
+    private boolean scriptInstalled;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setGravity(Gravity.CENTER);
-        content.setPadding(24, 24, 24, 24);
-        content.setBackgroundColor(Color.rgb(248, 250, 252));
-        content.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+        root = new FrameLayout(this);
+        root.setBackgroundColor(Color.WHITE);
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
-                view.setPadding(24 + insets.getSystemWindowInsetLeft(),
-                        24 + insets.getSystemWindowInsetTop(), 24 + insets.getSystemWindowInsetRight(),
-                        24 + insets.getSystemWindowInsetBottom());
+                if (Build.VERSION.SDK_INT >= 30) {
+                    int types = WindowInsets.Type.systemBars();
+                    if (Build.VERSION.SDK_INT >= 35) types |= WindowInsets.Type.ime();
+                    Insets padding = insets.getInsets(types);
+                    view.setPadding(padding.left, padding.top, padding.right, padding.bottom);
+                } else {
+                    view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
+                            insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
+                }
                 return insets;
             }
         });
-        TextView title = new TextView(this);
-        title.setText("JLAGENT\n质量改进 / 精益智能体");
-        title.setTextSize(24);
-        title.setGravity(Gravity.CENTER);
-        title.setTextColor(Color.rgb(16, 81, 191));
-        content.addView(title);
-        hint = new TextView(this);
-        hint.setText("使用 JLAGENT 账户密码登录。\nApp 不读取或保存您的密码。\n请保持网络连接。");
-        hint.setGravity(Gravity.CENTER);
-        hint.setTextSize(15);
-        hint.setPadding(0, 32, 0, 24);
-        content.addView(hint);
-        Button open = new Button(this);
-        open.setText("打开 JLAGENT");
-        open.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View view) { openSite(); }
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        FrameLayout.LayoutParams bar = new FrameLayout.LayoutParams(-1, (int) (3 * getResources().getDisplayMetrics().density));
+        bar.gravity = Gravity.TOP;
+        root.addView(progress, bar);
+        errorPanel = new LinearLayout(this);
+        errorPanel.setOrientation(LinearLayout.VERTICAL);
+        errorPanel.setGravity(Gravity.CENTER);
+        errorPanel.setPadding(32, 32, 32, 32);
+        errorPanel.setBackgroundColor(Color.WHITE);
+        errorText = new TextView(this);
+        errorText.setTextSize(16);
+        errorText.setGravity(Gravity.CENTER);
+        errorPanel.addView(errorText);
+        Button retry = new Button(this);
+        retry.setText("重新连接");
+        retry.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View view) {
+                if (downloadScript == null) { toast("请重新安装 JLAGENT"); return; }
+                if (web == null) createWebView();
+                errorPanel.setVisibility(View.GONE);
+                web.loadUrl(SITE);
+            }
         });
-        content.addView(open);
-        setContentView(content);
-        if (state == null) openSite();
-    }
-
-    @Override protected void onNewIntent(Intent intent) {
-        super.onNewIntent(intent);
-        setIntent(intent);
-        openSite();
-    }
-
-    private void openSite() {
-        // Fixed address only. No login secrets, custom API proxy, or SSL bypass.
-        Intent browser = new Intent(Intent.ACTION_VIEW, Uri.parse(SITE));
-        browser.addCategory(Intent.CATEGORY_BROWSABLE);
-        Bundle extras = new Bundle();
-        extras.putBinder("android.support.customtabs.extra.SESSION", null);
-        browser.putExtras(extras);
-        browser.putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", Color.rgb(16, 81, 191));
-        browser.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
+        errorPanel.addView(retry);
+        root.addView(errorPanel, new FrameLayout.LayoutParams(-1, -1));
+        errorPanel.setVisibility(View.GONE);
+        setContentView(root);
         try {
-            startActivity(browser);
-        } catch (ActivityNotFoundException error) {
-            hint.setText("手机没有可用浏览器。\n请安装 Chrome、Edge 或其他支持 HTTPS 的浏览器，\n然后点击“打开 JLAGENT”。");
+            InputStream input = getAssets().open("downloads.js");
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            int count;
+            while ((count = input.read(buffer)) != -1) bytes.write(buffer, 0, count);
+            input.close();
+            downloadScript = bytes.toString("UTF-8");
+        } catch (Exception error) {
+            showError("应用资源不完整，请重新安装 JLAGENT。");
+            return;
         }
+        downloads = new EmbeddedDownloads(this);
+        createWebView();
+        if (Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    new OnBackInvokedCallback() { @Override public void onBackInvoked() { goBack(); } });
+        }
+        web.loadUrl(SITE);
+    }
+
+    boolean currentSite() {
+        return web != null && isSite(web.getUrl());
+    }
+
+    private static boolean isSite(String value) {
+        if (value == null) return false;
+        Uri uri = Uri.parse(value);
+        return "https".equals(uri.getScheme()) && "47.114.99.132".equals(uri.getHost()) && uri.getPort() == 8003;
+    }
+
+    private void createWebView() {
+        web = new WebView(this);
+        WebSettings settings = web.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setUseWideViewPort(true);
+        settings.setLoadWithOverviewMode(true);
+        settings.setTextZoom(100);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setSupportMultipleWindows(false);
+        WebView.setWebContentsDebuggingEnabled(false);
+        CookieManager.getInstance().setAcceptCookie(true);
+        CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
+        root.addView(web, 0, new FrameLayout.LayoutParams(-1, -1));
+        web.setWebViewClient(new WebViewClient() {
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+                navigation++;
+                scriptInstalled = false;
+                downloads.resetChannel();
+                errorPanel.setVisibility(View.GONE);
+                progress.setVisibility(View.VISIBLE);
+            }
+            @Override public void onPageCommitVisible(WebView view, String url) { installDownloads(view); }
+            @Override public void onPageFinished(WebView view, String url) {
+                progress.setVisibility(View.GONE);
+                installDownloads(view);
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return handleNavigation(request.getUrl());
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleNavigation(Uri.parse(url));
+            }
+            @Override public void onReceivedSslError(WebView view, SslErrorHandler handler, SslError error) {
+                handler.cancel(); // Never bypass certificate validation, including subresources.
+                if (isSite(error.getUrl())) showError("HTTPS 证书校验失败，请联系管理员检查服务器证书。");
+            }
+            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) showError("暂时无法连接 JLAGENT，请检查网络后重试。");
+            }
+            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request, WebResourceResponse response) {
+                if (request.isForMainFrame()) showError("服务器暂时不可用（" + response.getStatusCode() + "），请稍后重试。");
+            }
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                downloads.resetChannel();
+                root.removeView(view);
+                view.destroy();
+                web = null;
+                showError("页面进程已停止，请重新连接。");
+                return true;
+            }
+        });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public void onProgressChanged(WebView view, int value) { progress.setProgress(value); }
+            @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams params) {
+                if (!currentSite()) return false;
+                if (upload != null) upload.onReceiveValue(null);
+                upload = callback;
+                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                picker.addCategory(Intent.CATEGORY_OPENABLE);
+                picker.setType("*/*");
+                ArrayList<String> types = new ArrayList<String>();
+                String[] accepts = params.getAcceptTypes();
+                if (accepts != null) for (String value : accepts) if (value != null && value.contains("/")) types.add(value);
+                if (!types.isEmpty()) picker.putExtra(Intent.EXTRA_MIME_TYPES, types.toArray(new String[types.size()]));
+                picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, params.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
+                picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                try { startActivityForResult(picker, PICK_FILE); }
+                catch (ActivityNotFoundException error) {
+                    upload.onReceiveValue(null);
+                    upload = null;
+                    toast("未找到系统文件选择器");
+                }
+                return true;
+            }
+        });
+        web.setDownloadListener(new DownloadListener() {
+            @Override public void onDownloadStart(String url, String agent, String disposition, String mime, long length) {
+                if (!currentSite()) { toast("请返回 JLAGENT 页面后下载文件"); return; }
+                web.evaluateJavascript("window.__jlNativeDownloads && window.__jlNativeDownloads.download(" +
+                        JSONObject.quote(url) + ", '', " + JSONObject.quote(mime == null ? "" : mime) + ")", null);
+            }
+        });
+    }
+
+    private void installDownloads(final WebView view) {
+        if (scriptInstalled || view != web || !currentSite() || errorPanel.getVisibility() == View.VISIBLE) return;
+        scriptInstalled = true;
+        final int document = navigation;
+        view.evaluateJavascript(downloadScript, new ValueCallback<String>() {
+            @Override public void onReceiveValue(String value) {
+                if (view == web && document == navigation && currentSite()) downloads.attach(view);
+            }
+        });
+    }
+
+    private boolean handleNavigation(Uri uri) {
+        if ("https".equals(uri.getScheme())) return false; // Links stay inside this WebView.
+        if ("about:blank".equals(uri.toString())) return false;
+        if ("tel".equals(uri.getScheme())) {
+            try { startActivity(new Intent(Intent.ACTION_DIAL, uri)); }
+            catch (ActivityNotFoundException error) { toast("此设备无法拨号"); }
+        } else toast("已阻止非 HTTPS 页面");
+        return true;
+    }
+
+    private void showError(String message) {
+        errorText.setText(message);
+        errorPanel.setVisibility(View.VISIBLE);
+        progress.setVisibility(View.GONE);
+    }
+
+    void toast(String message) { Toast.makeText(this, message, Toast.LENGTH_LONG).show(); }
+
+    void chooseSave(File file, String name, String mime) {
+        if (isFinishing() || isDestroyed()) { file.delete(); downloads.saveFinished(); return; }
+        pendingSave = file;
+        Intent picker = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        picker.addCategory(Intent.CATEGORY_OPENABLE);
+        picker.setType(mime);
+        picker.putExtra(Intent.EXTRA_TITLE, name);
+        try { startActivityForResult(picker, SAVE_FILE); }
+        catch (ActivityNotFoundException error) {
+            file.delete(); pendingSave = null; downloads.saveFinished(); toast("未找到系统文件保存界面");
+        }
+    }
+
+    @Override protected void onActivityResult(int request, int result, Intent data) {
+        super.onActivityResult(request, result, data);
+        if (request == PICK_FILE && upload != null) {
+            ArrayList<Uri> files = new ArrayList<Uri>();
+            if (result == RESULT_OK && data != null && currentSite()) {
+                if (data.getClipData() != null) {
+                    for (int i = 0; i < data.getClipData().getItemCount(); i++) addUpload(files, data.getClipData().getItemAt(i).getUri());
+                } else addUpload(files, data.getData());
+            }
+            upload.onReceiveValue(files.isEmpty() ? null : files.toArray(new Uri[files.size()]));
+            upload = null;
+        } else if (request == SAVE_FILE && pendingSave != null) {
+            final File file = pendingSave;
+            pendingSave = null;
+            final Uri destination = data == null ? null : data.getData();
+            if (result != RESULT_OK || destination == null || !"content".equals(destination.getScheme())) {
+                file.delete(); downloads.saveFinished(); return;
+            }
+            fileIO.execute(new Runnable() {
+                @Override public void run() {
+                    String notice = "文件已保存";
+                    try (InputStream input = new FileInputStream(file);
+                         OutputStream output = getContentResolver().openOutputStream(destination)) {
+                        if (output == null) throw new java.io.IOException("No output stream");
+                        byte[] buffer = new byte[32768];
+                        int count;
+                        while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
+                    } catch (Exception error) { notice = "文件保存失败，请重新下载"; }
+                    finally { file.delete(); downloads.saveFinished(); }
+                    final String message = notice;
+                    runOnUiThread(new Runnable() { @Override public void run() { if (!isDestroyed()) toast(message); } });
+                }
+            });
+        }
+    }
+
+    private static void addUpload(ArrayList<Uri> files, Uri uri) {
+        if (uri != null && "content".equals(uri.getScheme())) files.add(uri);
+    }
+
+    private void goBack() {
+        if (web == null) { finish(); return; }
+        web.evaluateJavascript("(function(){var s=document.getElementById('sidebar');" +
+                "if(s&&s.classList.contains('mobile-open')&&typeof closeSidebarMobile==='function'){closeSidebarMobile();return true;}return false;})()",
+                new ValueCallback<String>() {
+                    @Override public void onReceiveValue(String closed) {
+                        if ("true".equals(closed)) return;
+                        if (web != null && web.canGoBack()) web.goBack(); else finish();
+                    }
+                });
+    }
+    @Override public void onBackPressed() { goBack(); }
+    @Override protected void onPause() {
+        if (web != null) web.onPause();
+        CookieManager.getInstance().flush();
+        super.onPause();
+    }
+    @Override protected void onResume() { super.onResume(); if (web != null) web.onResume(); }
+    @Override protected void onDestroy() {
+        if (upload != null) { upload.onReceiveValue(null); upload = null; }
+        if (pendingSave != null) { pendingSave.delete(); pendingSave = null; }
+        if (downloads != null) downloads.close();
+        fileIO.shutdown();
+        if (web != null) { root.removeView(web); web.destroy(); web = null; }
+        super.onDestroy();
     }
 }
