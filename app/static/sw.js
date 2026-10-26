@@ -4,12 +4,14 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-v1.1.8-apk-download';
-const STATIC_CACHE = 'jlagent-static-v1.1.8-apk-download';
+const CACHE_NAME = 'jlagent-cache_name-20261026-mobile1';
+const STATIC_CACHE = 'jlagent-static_cache-20261026-mobile1';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
+    '/static/css/responsive.css?v=20261026-mobile1',
+    '/static/js/responsive.js?v=20261026-mobile1',
     '/',
     '/static/css/style.css',
     '/static/css/mobile.css?v=20261009-apk-download-1',
