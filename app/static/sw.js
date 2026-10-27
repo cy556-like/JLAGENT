@@ -4,8 +4,8 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-cache_name-20261027-sidebar-brand1';
-const STATIC_CACHE = 'jlagent-static_cache-20261027-sidebar-brand1';
+const CACHE_NAME = 'jlagent-cache_name-20261027-expert-label2';
+const STATIC_CACHE = 'jlagent-static_cache-20261027-expert-label2';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
@@ -16,7 +16,7 @@ const PRECACHE_URLS = [
     '/static/css/style.css?v=20261027-sidebar-brand1',
     '/static/css/mobile.css?v=20261009-apk-download-1',
     '/static/js/mobile.js?v=20261009-apk-download-1',
-    '/static/js/app.js?v=20261027-sidebar-brand1',
+    '/static/js/app.js?v=20261027-expert-label2',
     '/static/manifest.json',
     '/static/icons/icon-gy.svg',
     '/static/icons/icon-192.png',
