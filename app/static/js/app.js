@@ -829,7 +829,7 @@ function deleteAgent(agentId) {
         document.getElementById('kbUploadToggle').classList.remove('active');
         document.getElementById('agentKbBar').style.display = 'none';
         modeChatId['agent'] = null;
-        document.getElementById('chatTitle').textContent = '质量改进/精益 智能体';
+        document.getElementById('chatTitle').textContent = '全质科技公司 专家智能体 郑伟老师 精益质量管理';
         updateKbUploadVisibility();
         updateHeaderKbVisibility();
     }
@@ -1296,9 +1296,9 @@ function switchMode(mode) {
     if (titleEl) {
         if (mode === 'agent' && currentAgentId) {
             const agent = myAgents.find(a => a.id === currentAgentId);
-            titleEl.textContent = agent ? agent.name : '质量改进/精益 智能体';
+            titleEl.textContent = agent ? agent.name : '全质科技公司 专家智能体 郑伟老师 精益质量管理';
         } else {
-            titleEl.textContent = mode === 'agent' ? '质量改进/精益 智能体' : 'Chat';
+            titleEl.textContent = mode === 'agent' ? '全质科技公司 专家智能体 郑伟老师 精益质量管理' : 'Chat';
         }
     }
     // Reset agent when switching to chat mode
@@ -2057,7 +2057,7 @@ function updateWelcomeContent() {
     } else {
         // 默认欢迎页
         welcomeEl.innerHTML = `
-            <h2>质量改进/精益 智能体</h2>
+            <h2>全质科技公司 专家智能体 郑伟老师 精益质量管理</h2>
             <p>面向质量改进与精益工作的专业智能体</p>
             <div class="quick-actions">
                 <span class="quick-action" onclick="fillQuick(this)" data-question="模具设计评审有哪些关键节点？" role="button" tabindex="0">设计评审</span>

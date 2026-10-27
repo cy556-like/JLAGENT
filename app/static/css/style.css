@@ -1365,10 +1365,13 @@ html { scroll-behavior: smooth; }
     font-weight: 700;
     color: var(--text-primary);
     letter-spacing: -0.3px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
+    white-space: normal;
+    overflow: visible;
+    min-width: 0;
+    flex: 1;
+    line-height: 1.4;
+}
+.sidebar-brand-name > span { display: inline-block; }
 .new-chat-btn {
     width: 100%;
     padding: 10px 14px;
