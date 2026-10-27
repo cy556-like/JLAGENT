@@ -4,8 +4,8 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-cache_name-20261027-official-sources1';
-const STATIC_CACHE = 'jlagent-static_cache-20261027-official-sources1';
+const CACHE_NAME = 'jlagent-cache_name-20261027-brand-heading1';
+const STATIC_CACHE = 'jlagent-static_cache-20261027-brand-heading1';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
