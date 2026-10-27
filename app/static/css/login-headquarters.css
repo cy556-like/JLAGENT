@@ -1,0 +1,166 @@
+#loginModal .ql-headquarters{font-family:"Microsoft YaHei","PingFang SC",system-ui,sans-serif;color:#15263b;font-synthesis:none;--accent:#1552b6;--muted:#7d899a;--line:#e3e9ef}
+#loginModal .ql-headquarters *{box-sizing:border-box}
+#loginModal .ql-headquarters{margin:0;background:#f4f7fb}
+#loginModal .ql-headquarters button,#loginModal .ql-headquarters input{font:inherit}
+#loginModal .ql-headquarters button,#loginModal .ql-headquarters a{-webkit-tap-highlight-color:transparent}
+#loginModal .ql-headquarters button{cursor:pointer}
+#loginModal .ql-headquarters a{color:inherit;text-decoration:none}
+#loginModal .ql-headquarters button:focus-visible,#loginModal .ql-headquarters a:focus-visible{outline:3px solid #72a6ef;outline-offset:5px}
+#loginModal .ql-headquarters input:focus-visible{outline:none}
+#loginModal .ql-headquarters .sr-only{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+#loginModal .ql-headquarters .page-shell{min-height:100svh;display:flex;flex-direction:column}
+#loginModal .ql-headquarters .site-header{height:90px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:24px;padding:0 4.5vw;position:relative;z-index:10;background:#fff}
+#loginModal .ql-headquarters .brand{display:flex;align-items:center;gap:14px;min-width:0}
+#loginModal .ql-headquarters .brand-mark{width:46px;height:46px;border-radius:12px;background:#1752ad;display:grid;place-items:center;color:white;font-family:Georgia,serif;font-size:22px;font-weight:700;letter-spacing:-1px;flex-shrink:0}
+#loginModal .ql-headquarters .brand-copy{display:flex;flex-direction:column;gap:4px}
+#loginModal .ql-headquarters .brand-copy>b{font-size:19px;font-weight:700;letter-spacing:1px}
+#loginModal .ql-headquarters .brand-copy>span{font-size:12px;letter-spacing:.6px;color:#667489}
+#loginModal .ql-headquarters .header-right{display:flex;gap:16px;align-items:center;font-size:12px;letter-spacing:1.3px;color:#7d8a9a}
+#loginModal .ql-headquarters .header-right i{height:13px;border-left:1px solid #d7dee6}
+#loginModal .ql-headquarters .stage{position:relative;flex:1;min-height:660px;overflow:hidden;display:flex;align-items:center}
+#loginModal .ql-headquarters .hero{position:absolute;inset:0;isolation:isolate}
+#loginModal .ql-headquarters .scene,#loginModal .ql-headquarters .scene-wash{position:absolute;inset:0;z-index:-2;background-size:cover;background-position:center}
+#loginModal .ql-headquarters .scene-wash{z-index:-1}
+#loginModal .ql-headquarters .scene{background-image:url('/static/images/zheng-login-office-20261027.png')}
+#loginModal .ql-headquarters .headline{position:absolute;z-index:3}
+#loginModal .ql-headquarters .eyebrow{margin:0 0 17px;font-size:10px;font-weight:600;letter-spacing:2.3px;line-height:1.6}
+#loginModal .ql-headquarters .headline h1{margin:0;font-size:clamp(38px,4.1vw,70px);line-height:1.25;letter-spacing:2px;font-weight:600}
+#loginModal .ql-headquarters .headline h1 em{font-style:normal}
+#loginModal .ql-headquarters .hero-subtitle{font-size:14px;line-height:1.9;letter-spacing:1px;margin:20px 0 0}
+#loginModal .ql-headquarters .expert-portrait{position:absolute;z-index:2;object-fit:contain;object-position:bottom;height:96%;bottom:-3%;left:22%;width:40%;filter:drop-shadow(12px 10px 16px #102a4133);user-select:none;pointer-events:none}
+#loginModal .ql-headquarters .expert-caption{position:absolute;z-index:4}
+#loginModal .ql-headquarters .expert-role{font-size:11px;letter-spacing:1.2px;margin:0 0 12px;line-height:1.7}
+#loginModal .ql-headquarters .expert-name{font-size:36px;letter-spacing:4px;margin:0 0 16px;font-weight:600}
+#loginModal .ql-headquarters .expert-name span{font-size:16px;letter-spacing:1px;margin-left:8px;font-weight:400}
+#loginModal .ql-headquarters .expert-domain{font-size:11px;letter-spacing:.7px;line-height:1.8;margin:0}
+#loginModal .ql-headquarters .login-panel{position:relative;z-index:6;width:360px;flex-shrink:0;margin-left:auto;margin-right:7vw;padding:38px 34px 26px;background:#fff;border:1px solid #ffffffba;border-radius:15px;box-shadow:0 22px 70px #12325d25}
+#loginModal .ql-headquarters .panel-kicker{display:flex;align-items:center;gap:8px;font-size:9px;letter-spacing:1.7px;color:var(--accent);font-weight:600}
+#loginModal .ql-headquarters .tiny-line{width:18px;border-top:2px solid currentColor}
+#loginModal .ql-headquarters .login-panel h2{font-size:27px;line-height:1.4;font-weight:650;margin:20px 0 9px;letter-spacing:2px}
+#loginModal .ql-headquarters .login-intro{font-size:11px;color:var(--muted);margin:0 0 29px;line-height:1.8}
+#loginModal .ql-headquarters .field{margin-bottom:20px}
+#loginModal .ql-headquarters .field label{display:block;font-size:12px;font-weight:500;margin-bottom:9px}
+#loginModal .ql-headquarters .input-wrap{position:relative}
+#loginModal .ql-headquarters .input-wrap input{width:100%;height:47px;background:#f6f8fb;border:1px solid var(--line);padding:0 14px;border-radius:6px;color:inherit;transition:border-color .18s,box-shadow .18s;font-size:13px;min-width:0}
+#loginModal .ql-headquarters .input-wrap input[type=password],#loginModal .ql-headquarters .input-wrap input[name=password]{padding-right:48px}
+#loginModal .ql-headquarters .input-wrap input::placeholder{color:#a1adbc}
+#loginModal .ql-headquarters .input-wrap input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #286de412}
+#loginModal .ql-headquarters .password-toggle{position:absolute;right:4px;top:4px;border:0;background:transparent;border-radius:4px;color:#8c99a9;width:39px;height:39px;padding:10px}
+#loginModal .ql-headquarters .password-toggle svg{display:block;width:19px;height:19px}
+#loginModal .ql-headquarters .password-toggle:hover{color:var(--accent);background:#1d5ab90b}
+#loginModal .ql-headquarters .login-meta{display:flex;justify-content:space-between;align-items:center;font-size:10px;color:var(--muted);margin:3px 0 24px;gap:10px}
+#loginModal .ql-headquarters .login-meta span:first-child{display:flex;align-items:center;gap:5px}
+#loginModal .ql-headquarters .login-meta svg{width:14px;height:14px}
+#loginModal .ql-headquarters .login-button{width:100%;height:49px;border:0;border-radius:6px;background:var(--accent);color:#fff;display:flex;align-items:center;justify-content:center;gap:20px;font-size:14px;font-weight:600;box-shadow:0 7px 16px #154baf1f;transition:filter .18s,transform .18s}
+#loginModal .ql-headquarters .login-button svg{width:20px;height:20px}
+#loginModal .ql-headquarters .login-button:hover{filter:brightness(1.1);transform:translateY(-1px)}
+#loginModal .ql-headquarters .login-button:active{transform:translateY(0)}
+#loginModal .ql-headquarters .form-status{font-size:11px;color:var(--accent);line-height:1.7;min-height:0;margin:0}
+#loginModal .ql-headquarters .form-status:not(:empty){margin-top:14px}
+#loginModal .ql-headquarters .panel-bottom{border-top:1px solid var(--line);padding-top:20px;margin-top:30px;font-size:10px;color:var(--muted);display:flex;align-items:center;justify-content:center;gap:7px;letter-spacing:.3px}
+#loginModal .ql-headquarters .small-dot{width:4px;height:4px;border-radius:100%;background:var(--accent)}
+#loginModal .ql-headquarters .site-footer{min-height:44px;display:flex;align-items:center;justify-content:space-between;padding:12px 4.5vw;font-size:10px;color:#8490a1;letter-spacing:.5px;gap:14px;background:white}
+#loginModal .ql-headquarters .scene-wash{background:linear-gradient(90deg,#0b2949e8 0%,#173b5d82 38%,#152f4d22 62%,#d5e1ef0d 100%),linear-gradient(0deg,#142c4d8c,transparent 70%)}
+#loginModal .ql-headquarters .headline{left:5.2%;top:8.8%;color:white}
+#loginModal .ql-headquarters .eyebrow{color:#cee2fa;font-size:9px}
+#loginModal .ql-headquarters .calligraphy{display:block;width:min(30vw,470px);height:auto;margin:-36px 0 -47px -10px}
+#loginModal .ql-headquarters .hero-subtitle{color:#d9e5f1;font-size:12px;margin-top:0}
+#loginModal .ql-headquarters .expert-caption{color:white;left:6%;bottom:13%}
+#loginModal .ql-headquarters .caption-line{display:block;width:32px;border-top:2px solid #a9d3ff;margin-bottom:20px}
+#loginModal .ql-headquarters .expert-role{color:#d4e2f1}
+#loginModal .ql-headquarters .expert-domain{color:#c8d9ea}
+#loginModal .ql-headquarters .login-panel{background:#ffffffed;backdrop-filter:blur(18px)}
+#loginModal .ql-headquarters .expert-portrait{left:22.5%;height:96%;bottom:-4%}
+#loginModal .ql-headquarters .headline-period{color:#b89668}
+#loginModal .ql-headquarters .scene-word{position:absolute;z-index:1;bottom:5%;left:8.5%;font-size:11px;letter-spacing:7px;color:#5f809c5e}
+#loginModal .ql-headquarters .signal-dot{display:block;width:5px;height:5px;background:#86d2ef}
+#loginModal .ql-headquarters .expert-tags{display:flex;gap:6px;margin-top:18px}
+#loginModal .ql-headquarters .expert-tags span{font-size:9px;border:1px solid #9eb9d03d;padding:6px 8px;border-radius:2px;color:#b6d0e4}
+#loginModal .ql-headquarters .industrial-line{position:absolute;left:5.3%;top:7%;width:35%;border-top:1px solid #8cbbdc3b}
+#loginModal .ql-headquarters .portrait-orbit{position:absolute;z-index:0;width:80%;aspect-ratio:1;border:1px solid #a9997929;left:40%;top:11%;border-radius:50%}
+@media(min-width:1800px){#loginModal .ql-headquarters .stage{min-height:760px}
+#loginModal .ql-headquarters .login-panel{width:410px;padding:44px 40px 32px}
+#loginModal .ql-headquarters .login-panel h2{font-size:30px}
+#loginModal .ql-headquarters .login-intro{font-size:12px}
+#loginModal .ql-headquarters .field label{font-size:13px}
+#loginModal .ql-headquarters .input-wrap input{height:54px;font-size:14px}
+#loginModal .ql-headquarters .password-toggle{top:7px}
+#loginModal .ql-headquarters .login-button{height:54px}
+#loginModal .ql-headquarters .expert-name{font-size:42px}
+#loginModal .ql-headquarters .expert-role,#loginModal .ql-headquarters .expert-domain{font-size:13px}
+#loginModal .ql-headquarters .expert-portrait{left:22%;height:99%}}
+@media(max-width:1100px) and (min-width:761px){#loginModal .ql-headquarters .site-header{height:80px}
+#loginModal .ql-headquarters .brand-copy>b{font-size:17px}
+#loginModal .ql-headquarters .brand-copy>span{font-size:11px}
+#loginModal .ql-headquarters .header-right{font-size:10px;gap:10px}
+#loginModal .ql-headquarters .stage{min-height:620px}
+#loginModal .ql-headquarters .login-panel{width:315px;margin-right:4vw;padding:30px 26px}
+#loginModal .ql-headquarters .headline h1{font-size:37px}
+#loginModal .ql-headquarters .expert-portrait{left:18%;height:88%;bottom:-3%;width:46%}
+#loginModal .ql-headquarters .expert-caption{bottom:10%}
+#loginModal .ql-headquarters .calligraphy{width:29vw;margin-bottom:-30px}
+#loginModal .ql-headquarters .hero-subtitle{font-size:10px;max-width:225px}
+#loginModal .ql-headquarters .expert-tags{flex-wrap:wrap;max-width:170px}}
+@media(max-width:760px){#loginModal .ql-headquarters .site-header{height:auto;min-height:78px;padding:17px 20px;gap:12px}
+#loginModal .ql-headquarters .brand{gap:11px}
+#loginModal .ql-headquarters .brand-mark{width:40px;height:40px;border-radius:9px;font-size:19px}
+#loginModal .ql-headquarters .brand-copy>b{font-size:15px;letter-spacing:.6px}
+#loginModal .ql-headquarters .brand-copy>span{font-size:9px;letter-spacing:0;line-height:1.5}
+#loginModal .ql-headquarters .header-right{display:none}
+#loginModal .ql-headquarters .stage{display:flex;flex-direction:column;align-items:stretch;overflow:hidden;min-height:0}
+#loginModal .ql-headquarters .hero{position:relative;height:360px;min-height:360px;inset:auto;overflow:hidden;flex-shrink:0}
+#loginModal .ql-headquarters .headline{left:6%!important;top:11%!important}
+#loginModal .ql-headquarters .eyebrow{font-size:8px!important;letter-spacing:1px!important;margin-bottom:12px}
+#loginModal .ql-headquarters .headline h1{font-size:31px!important;line-height:1.4!important;letter-spacing:1px!important}
+#loginModal .ql-headquarters .hero-subtitle{font-size:10px!important;line-height:1.8!important;letter-spacing:0!important;max-width:170px;margin-top:12px!important}
+#loginModal .ql-headquarters .expert-portrait{width:68%!important;height:99%!important;left:36%!important;bottom:-4%!important}
+#loginModal .ql-headquarters .expert-caption{left:6%!important;bottom:10%!important}
+#loginModal .ql-headquarters .expert-role{font-size:9px!important;letter-spacing:.5px!important;max-width:148px!important;margin-bottom:7px}
+#loginModal .ql-headquarters .expert-name{font-size:25px!important;letter-spacing:2px!important;margin-bottom:8px}
+#loginModal .ql-headquarters .expert-name span{font-size:12px!important;margin-left:5px}
+#loginModal .ql-headquarters .expert-domain{font-size:8px!important;line-height:1.8!important;max-width:150px!important;letter-spacing:0!important}
+#loginModal .ql-headquarters .caption-line{width:24px;margin-bottom:13px}
+#loginModal .ql-headquarters .login-panel{width:auto!important;max-width:none!important;margin:0!important;border-radius:0!important;border:0!important;box-shadow:none!important;padding:30px 26px 24px!important;background:white}
+#loginModal .ql-headquarters .login-panel h2{font-size:25px!important;letter-spacing:1px;margin-top:15px!important}
+#loginModal .ql-headquarters .login-intro{font-size:11px!important;margin-bottom:25px!important}
+#loginModal .ql-headquarters .panel-kicker{font-size:8px!important}
+#loginModal .ql-headquarters .field{margin-bottom:20px!important}
+#loginModal .ql-headquarters .field label{font-size:12px}
+#loginModal .ql-headquarters .input-wrap input{height:48px!important;font-size:14px!important}
+#loginModal .ql-headquarters .password-toggle{top:4px!important}
+#loginModal .ql-headquarters .login-button{height:48px!important}
+#loginModal .ql-headquarters .login-meta{margin-bottom:22px;font-size:10px}
+#loginModal .ql-headquarters .panel-bottom{margin-top:25px!important;font-size:10px!important}
+#loginModal .ql-headquarters .site-footer{font-size:8px;line-height:1.8;padding:15px 20px;flex-direction:column;align-items:flex-start;gap:2px}
+#loginModal .ql-headquarters .scene-wash{background:linear-gradient(90deg,#102c49ec,#14344f5e 70%,#14344f40),linear-gradient(0deg,#0c254c44,transparent)}
+#loginModal .ql-headquarters .calligraphy{width:235px;max-width:63vw;margin:-15px 0 -23px -6px}
+#loginModal .ql-headquarters .hero-subtitle{font-size:9px!important;max-width:155px;margin-top:0!important}
+#loginModal .ql-headquarters .expert-portrait{left:33%!important;width:74%!important;height:99%!important}
+#loginModal .ql-headquarters .expert-caption{bottom:10%!important}
+#loginModal .ql-headquarters .login-panel{background:#fff}
+#loginModal .ql-headquarters .scene-word{display:none}
+#loginModal .ql-headquarters .industrial-line{left:6%;top:7%;width:65%}
+#loginModal .ql-headquarters .portrait-orbit{top:8%}}
+@media(prefers-reduced-motion:reduce){#loginModal .ql-headquarters *{scroll-behavior:auto!important;transition:none!important}}
+@media(max-width:760px){#loginModal .ql-headquarters .calligraphy{display:none}
+#loginModal .ql-headquarters .mobile-slogan{position:static;clip:auto;width:auto;height:auto;overflow:visible;white-space:normal;padding:0;border:0;font-family:KaiTi,STKaiti,serif;font-size:clamp(25px,7.5vw,31px)!important;font-weight:600;line-height:1.45!important;margin:0 0 12px}
+#loginModal .ql-headquarters .hero-subtitle{max-width:145px}}
+#loginModal .ql-headquarters .site-header{height:64px;min-height:64px;padding:0 36px;background:#1051bf;border:0;color:#fff}
+#loginModal .ql-headquarters .legacy-brand{color:#fff;font-family:"SimSun","Songti SC",serif;font-size:26px;font-weight:700;line-height:1.5;letter-spacing:0;white-space:normal}
+@media(max-width:760px){#loginModal .ql-headquarters .site-header{height:auto;min-height:60px;padding:14px 18px}
+#loginModal .ql-headquarters .legacy-brand{font-size:clamp(15px,4.4vw,18px);line-height:1.6}}
+/* Integrate with the existing login overlay and account controls. */
+#loginModal{align-items:flex-start;justify-content:stretch;overflow-y:auto;overflow-x:hidden;padding:0;overscroll-behavior:contain}
+#loginModal .ql-headquarters{width:100%;height:auto;min-height:100%;max-width:none;flex:0 0 auto;display:block;overflow:visible;animation:none;padding:0;border:0;border-radius:0;box-shadow:none}
+#loginModal .ql-headquarters::before{content:none}
+#loginModal .ql-headquarters h1,#loginModal .ql-headquarters h2,#loginModal .ql-headquarters p{font-family:inherit}
+#loginModal .ql-headquarters #loginForm{display:block}
+#loginModal .ql-headquarters #loginMsg{font-size:11px;line-height:1.7;margin:14px 0 0;padding:9px 11px;border-radius:6px}
+#loginModal .ql-headquarters #loginMsg:empty{display:none}
+#loginModal .ql-headquarters #loginSubmit:disabled{opacity:.65;cursor:wait;transform:none}
+#loginModal .ql-headquarters .mobile-apk-download{background:#fff}
+@media(max-width:760px){
+ #loginModal .ql-headquarters .page-shell{min-height:var(--agent-mobile-height,100svh)}
+ #loginModal .ql-headquarters .input-wrap input{font-size:16px!important}
+ #loginModal .ql-headquarters .mobile-apk-download{padding-top:8px}
+}
