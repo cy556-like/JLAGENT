@@ -203,11 +203,13 @@ const ZHENG_TEACHER_PROFILE = {
             label: '个人简介',
             content: '自2001年加入天津一汽丰田起，从事整车厂质量管理工作20年；先后在长城汽车、吉利汽车、北汽集团担任重要管理职务，拥有质量、技术、生产与企业运营实战经验。现为北京全质科技股份有限公司创办人、股东。'
         },
-        wechat: {
-            label: '个人微信',
-            content: '如需要联系郑伟老师，请加微信：',
-            image: '/static/images/zheng-wei-wechat-20261009-v2.png',
-            imageAlt: '郑伟老师个人微信二维码'
+        sources: {
+            label: '官方资料',
+            content: '专家介绍整理自官方网站，具体信息以官网为准。个人联系方式请通过官网核实。',
+            sourceUrls: [
+                'https://www.quanquality.com/index.php?ac=article&at=read&did=596',
+                'https://www.huazhi-cloud.com/partners/'
+            ]
         }
     }
 };
@@ -2114,9 +2116,11 @@ function renderZhengTeacherWelcome(welcomeEl) {
 
 function renderZhengProfileSection(section) {
     const imageHtml = section.image
-        ? `<img class="zheng-wechat-image" src="${escapeHtml(section.image)}" alt="${escapeHtml(section.imageAlt || '郑伟老师个人微信二维码')}">`
+        ? `<img class="zheng-wechat-image" src="${escapeHtml(section.image)}" alt="${escapeHtml(section.imageAlt || '资料图片')}">`
         : '';
-    return `<p class="zheng-profile-copy">${escapeHtml(section.content)}</p>${imageHtml}`;
+    const sources = (section.sourceUrls || []).map((url, index) =>
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">官网资料${index + 1}</a>`).join(' · ');
+    return `<p class="zheng-profile-copy">${escapeHtml(section.content)}</p>${imageHtml}${sources ? '<p class="zheng-profile-copy">资料来源：' + sources + '</p>' : ''}`;
 }
 
 function showZhengProfileTab(button, sectionKey) {
