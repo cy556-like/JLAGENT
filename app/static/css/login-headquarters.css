@@ -164,3 +164,10 @@
  #loginModal .ql-headquarters .input-wrap input{font-size:16px!important}
  #loginModal .ql-headquarters .mobile-apk-download{padding-top:8px}
 }
+
+/* Filing and customer-service information match the established login footer. */
+#loginModal .ql-headquarters .site-footer{min-height:46px;padding:12px 16px;font-size:12px;color:#1051bf;line-height:1.6;letter-spacing:0;gap:12px}
+@media(max-width:760px){
+ #loginModal .ql-headquarters .site-footer{font-size:12px;line-height:1.7;gap:6px;padding-bottom:max(12px,env(safe-area-inset-bottom))}
+ #loginModal .ql-headquarters .site-footer span{max-width:100%;overflow-wrap:anywhere}
+}
