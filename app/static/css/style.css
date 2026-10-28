@@ -1363,7 +1363,7 @@ html { scroll-behavior: smooth; }
     flex: 1;
     line-height: 1.4;
 }
-.sidebar-brand-name > span { display: inline-block; }
+.sidebar-brand-name > span { display: block; white-space: nowrap; }
 .new-chat-btn {
     width: 100%;
     padding: 10px 14px;
