@@ -4,17 +4,17 @@
  * 版本: 1.1.0
  */
 
-const CACHE_NAME = 'jlagent-cache_name-20261028-sidebar-title2';
-const STATIC_CACHE = 'jlagent-static_cache-20261028-sidebar-title2';
+const CACHE_NAME = 'jlagent-cache_name-20261028-hq-factory1';
+const STATIC_CACHE = 'jlagent-static_cache-20261028-hq-factory1';
 const DYNAMIC_CACHE = 'jlagent-dynamic-v1.1.0';
 
 // 需要预缓存的静态资源
 const PRECACHE_URLS = [
     '/static/images/quanquality-sidebar-blue-20261028.png',
     '/static/images/quanquality-login-white-20261027.png',
-    '/static/css/login-headquarters.css?v=20261027-logo3',
+    '/static/css/login-headquarters.css?v=20261028-hq-factory1',
     '/static/js/login-headquarters.js?v=20261027-hq-login1',
-    '/static/images/zheng-login-office-20261027.png',
+    '/static/images/zheng-login-factory-20261028.png',
     '/static/images/zheng-login-portrait-20261027.png',
 
     '/static/css/responsive.css?v=20261026-mobile1',
